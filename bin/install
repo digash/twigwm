@@ -6,7 +6,7 @@
        (home (user-homedir-pathname))
        (config (merge-pathnames "twigwm/"
                  (uiop:ensure-directory-pathname
-                   (or (uiop:getenv "XDG_CONFIG_HOME") (merge-pathnames ".config/" home)))))
+                   (or (uiop:getenv "XDG_CONFIG_HOME") (merge-pathnames ".config/" home))))))
   (handler-case
       (progn
         (dolist (pair (list (cons (merge-pathnames "bin/twigwm" root)
