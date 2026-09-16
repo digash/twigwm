@@ -1,0 +1,44 @@
+#!/usr/bin/env -S ciel --
+;;;; Same-host installation from a Git checkout; no network operations.
+(let* ((args (uiop:command-line-arguments))
+       (args (if (equal (first args) "--") (rest args) args))
+       (root (truename (merge-pathnames "../" (uiop:pathname-directory-pathname (truename (first args))))))
+       (home (user-homedir-pathname))
+       (config (merge-pathnames "twigwm/"
+                 (uiop:ensure-directory-pathname
+                   (or (uiop:getenv "XDG_CONFIG_HOME") (merge-pathnames ".config/" home)))))
+  (handler-case
+      (progn
+        (dolist (pair (list (cons (merge-pathnames "bin/twigwm" root)
+                                 (merge-pathnames ".local/bin/twigwm" home))
+                           (cons root (merge-pathnames "source" config))))
+          (ensure-directories-exist (cdr pair))
+          (uiop:run-program (list "ln" "-sfn" (namestring (car pair)) (namestring (cdr pair)))))
+        (when (member "--mac-input" (rest args) :test #'equal)
+          (unless (uiop:os-macosx-p) (error "--mac-input requires macOS"))
+          (let* ((uid (string-trim '(#\Space #\Newline) (uiop:run-program '("id" "-u") :output :string)))
+                 (domain (concatenate 'string "gui/" uid))
+                 (plist (merge-pathnames "Library/LaunchAgents/org.twigwm.input.plist" home))
+                 (log (merge-pathnames "Library/Logs/twigwm-input.log" home))
+                 (ciel (string-trim '(#\Space #\Newline)
+                         (uiop:run-program '("/usr/bin/which" "ciel") :output :string))))
+            (labels ((xml (text)
+                       (with-output-to-string (s)
+                         (loop for c across (namestring text) do
+                           (write-string (case c (#\& "&amp;") (#\< "&lt;")
+                                               (#\> "&gt;") (t (string c))) s)))))
+              (ensure-directories-exist plist)
+              (ensure-directories-exist log)
+              (with-open-file (s plist :direction :output :if-exists :supersede)
+                (format s "<?xml version=~s encoding=~s?>~%<plist version=~s><dict>~%" "1.0" "UTF-8" "1.0")
+                (format s "<key>Label</key><string>org.twigwm.input</string>~%")
+                (format s "<key>ProgramArguments</key><array><string>~a</string><string>--</string><string>~a</string><string>mac-input</string></array>~%"
+                        (xml ciel) (xml (merge-pathnames "bin/twigwm" root)))
+                (format s "<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>10</integer>~%")
+                (format s "<key>LimitLoadToSessionType</key><string>Aqua</string><key>ProcessType</key><string>Interactive</string>~%")
+                (format s "<key>StandardOutPath</key><string>~a</string><key>StandardErrorPath</key><string>~a</string>~%</dict></plist>~%" (xml log) (xml log))))
+            (uiop:run-program (list "launchctl" "bootout" (concatenate 'string domain "/org.twigwm.input"))
+                              :ignore-error-status t :error-output nil)
+            (uiop:run-program (list "launchctl" "bootstrap" domain (namestring plist)))))
+        (format t "TwigWM installed from ~a~%" root))
+    (error (e) (format *error-output* "TwigWM installation failed: ~a~%" e) (uiop:quit 1))))

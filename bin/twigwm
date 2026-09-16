@@ -1,0 +1,10 @@
+#!/usr/bin/env -S ciel --
+;;;; Copyright (c) 2026 TwigWM contributors. MIT License.
+(let* ((args (uiop:command-line-arguments))
+       (args (if (equal (first args) "--") (rest args) args))
+       (self (truename (first args))))
+  (handler-case
+      (progn
+        (load (merge-pathnames "../src/load.lisp" self))
+        (funcall (find-symbol "MAIN" :twigwm) (rest args)))
+    (error (e) (format *error-output* "TwigWM: ~a~%" e) (uiop:quit 1))))

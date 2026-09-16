@@ -1,0 +1,106 @@
+#+title: TwigWM
+
+TwigWM is a Common Lisp window-control toolkit, written for Ciel. It provides
+native macOS keyboard shortcuts and window placement, WSLg window arrangement,
+and application/key tables that can also be consumed by StumpWM.
+
+On macOS it runs alongside the system window manager. It uses Accessibility
+and a CoreGraphics event tap; it does not remove native title bars or replace
+the macOS compositor. On ordinary X11 desktops StumpWM remains the window manager.
+
+* Install
+
+Install [[https://ciel-lang.org/][Ciel]] (SBCL with UIOP and CFFI). WSLg modes additionally require CLX.
+Clone this repository, then run from its root:
+
+#+begin_src sh
+ciel -- bin/install
+twigwm --help
+#+end_src
+
+The installer links =~/.local/bin/twigwm= and =~/.config/twigwm/source= to this
+checkout. Keep the checkout available. It does not download dependencies or
+overwrite your configuration. Put =~/.local/bin= on PATH.
+
+Copy =examples/config.lisp= to =~/.config/twigwm/config.lisp= and edit your app
+assignments. =TWIGWM_CONFIG= overrides that path; =XDG_CONFIG_HOME= is respected.
+Configuration is executable Lisp and should come from a source you trust.
+
+On macOS, grant the Ciel executable Accessibility and Input Monitoring access
+in System Settings, then run:
+
+#+begin_src sh
+ciel -- bin/install --mac-input
+#+end_src
+
+This installs the per-user =org.twigwm.input= LaunchAgent. Its log is
+=~/Library/Logs/twigwm-input.log=. Reload it after editing configuration with
+=launchctl kickstart -k gui/UID/org.twigwm.input= (replace UID with =id -u='s output).
+
+* macOS controls
+
+- Command-1 through Command-9 run or raise the assigned application.
+- Command-arrow moves the focused window between configured regions.
+- Command-Escape consumes the chord and reads one local TwigWM shortcut,
+  including when a remote desktop has captured the keyboard.
+- Command-Escape twice selects the previous individual window, including
+  another window of the same application.
+- Command-Escape then bare Escape sends Command-Escape to the focused app.
+- Control-G, Command-Tab, or a mouse click cancels the local prefix.
+
+Remote applications marked =:mac-passthrough t= receive ordinary number keys.
+Fullscreen remote windows receive ordinary Command-arrows. The local prefix
+selects TwigWM's bindings explicitly. Placement does not resize native fullscreen
+windows, minimized windows, or dialogs.
+
+The example splits the primary display into left one third and right two thirds.
+=twigwm-macos-apps:screens= returns display UUIDs and geometry for configuring
+additional displays. A region is =(NAME DISPLAY LEFT TOP RIGHT BOTTOM)=, with
+fractional edges. A display is =(NAME UUID TOP-CLEARANCE)=; =:primary= may replace
+the UUID. Missing displays are skipped.
+
+TwigWM remembers the region chosen by Command-arrows for each individual window.
+This state is in memory and resets when the service restarts.
+
+* Optional remote routing
+
+Set =twigwm-macos-input:*number-device*= to a Windows App saved-device name to
+route Command-1 through Command-9 to that device, then forward the same shortcut.
+Set =*zero-device*= to make Command-0 select another saved device locally.
+Both default to NIL. These names, application assignments, commands, and display
+UUIDs belong in your local configuration, not in the project sources.
+
+=examples/keys.lisp= demonstrates screenshot forwarding, clipboard keys for AHK,
+and an optional [[https://github.com/digash/cl-art][cl-art]] binding. Load it while in =:twigwm-keys= or copy the
+desired entries to your configuration. Commands and paths are examples to adapt.
+
+* WSLg and StumpWM
+
+=twigwm start NAME= runs or raises an entry in =twigwm-apps:*apps*=.
+=arrange [N]= arranges WSLg windows; =watch [N]= watches for new windows.
+The default layout fills the display. Custom monitor arrangements may set
+=twigwm-w32::*layout-function*= to a function of =(DISPLAY ROOT MONITOR-COUNT)=.
+Native Windows move operations expect AutoHotkey and an independently installed
+=w32-move-window.ahk= helper; those are not required for macOS or single-display WSLg.
+
+=emit-ahk= updates marked application/key blocks in an existing AutoHotkey file.
+It does not install a Windows login policy or change idle-lock behavior.
+=session= starts StumpWM unless =twigwm:*session-function*= is configured.
+
+StumpWM can load =src/apps.lisp= and =src/keys.lisp=, followed by local tables,
+without loading the macOS event tap. TwigWM does not replace StumpWM's own
+prefix implementation; forwarding Command-Escape allows a configured remote
+StumpWM to handle its host prefix.
+
+* Tests
+
+Run each =tests/*.lisp= file except =fixture.lisp= with =ciel --no-userinit FILE=.
+Tests use synthetic configuration and never load your personal config.
+On macOS, =macos-input.lisp= creates an isolated event tap and requires the same
+permissions as the service. Stop the resident service while running that test.
+Its tagged events are consumed by the test sink. Placement tests read native
+display/window information but do not move live windows.
+
+* License
+
+MIT; see =LICENSE=.

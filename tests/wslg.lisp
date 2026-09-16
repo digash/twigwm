@@ -1,0 +1,20 @@
+(load (merge-pathnames "../src/load.lisp" *load-truename*))
+(load (merge-pathnames "../src/w32.lisp" *load-truename*))
+(in-package :twigwm-w32)
+(let ((rename (symbol-function 'rename-windows))
+      (maximize (symbol-function 'maximize-all))
+      (*layout-function* nil) (calls nil))
+  (unwind-protect
+       (progn
+         (setf (symbol-function 'rename-windows) (lambda (&rest args) (declare (ignore args)))
+               (symbol-function 'maximize-all) (lambda (d root) (push (list :default d root) calls)))
+         (arrange* :display :root 1)
+         (assert (equal calls '((:default :display :root))))
+         (setf *layout-function* (lambda (d root n) (push (list :custom d root n) calls)))
+         (arrange* :display :root 3)
+         (assert (equal (first calls) '(:custom :display :root 3))))
+    (setf (symbol-function 'rename-windows) rename
+          (symbol-function 'maximize-all) maximize)))
+(assert (equal '("before" "begin" "new" "end" "after")
+               (replace-block '("before" "begin" "old" "end" "after") "begin" "end" "new")))
+(format t "WSLG_TESTS_COMPLETE~%")
