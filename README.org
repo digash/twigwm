@@ -53,6 +53,13 @@ Fullscreen remote windows receive ordinary Command-arrows. The local prefix
 selects TwigWM's bindings explicitly. Placement does not resize native fullscreen
 windows, minimized windows, or dialogs.
 
+Set =twigwm-macos-input:*swap-tab-modifiers*= to =t= in your configuration to
+use Option-Tab for the native Mac app switcher and Command-Tab for Alt-Tab in
+remote apps marked =:mac-passthrough t=. Shift cycles backwards; releasing the
+physical modifier selects. Command-Tab outside remote apps stays native.
+Either switcher cancels the local prefix and pending keyboard handoff.
+The remote target remains fixed until release. Other shortcuts are unchanged.
+
 The example splits the primary display into left one third and right two thirds.
 =twigwm-macos-apps:screens= returns display UUIDs and geometry for configuring
 additional displays. A region is =(NAME DISPLAY LEFT TOP RIGHT BOTTOM)=, with

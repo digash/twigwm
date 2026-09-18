@@ -4,8 +4,9 @@
 (load (merge-pathnames "keys.lisp" *load-truename*))
 (defpackage :twigwm-macos-input
   (:use :cl)
-  (:export #:probe #:run #:*number-device* #:*zero-device*))
+  (:export #:probe #:run #:*number-device* #:*zero-device* #:*swap-tab-modifiers*))
 (in-package :twigwm-macos-input)
+(load (merge-pathnames "macos-tab.lisp" *load-truename*))
 
 ;;; Pure FIFO: readiness is explicit and belongs to one handoff generation.
 (defstruct handoff
@@ -38,6 +39,7 @@
 (defconstant +test-tag+ #x4349454c)
 (defconstant +replay-tag+ #x4349454d)
 (defconstant +heartbeat-tag+ #x4349454e)
+(defconstant +tab-tag+ #x4349454f)
 (defconstant +command+ #x100000)
 (defvar *handoff*)
 (defvar *callback-error* nil)
@@ -232,8 +234,19 @@
 (defun post-to-app (pid event)
   (cffi:foreign-funcall "CGEventPostToPid" :int pid :pointer event :void))
 
+(defun post-event (event tag)
+  ;; Re-tag the SOURCE, not just field 42: WindowServer serializes source data.
+  (let ((source (cffi:foreign-funcall "CGEventSourceCreate" :int32 -1 :pointer)))
+    (when (cffi:null-pointer-p source) (error "Cannot create replay source"))
+    (unwind-protect
+         (progn
+           (cffi:foreign-funcall "CGEventSourceSetUserData" :pointer source :int64 tag :void)
+           (cffi:foreign-funcall "CGEventSetSource" :pointer event :pointer source :void)
+           (cffi:foreign-funcall "CGEventPost" :uint32 0 :pointer event :void))
+      (release-events (list source)))))
+
 (defun post-key-chord (pid chord)
-  "Target the app, bypassing macOS hotkeys; include actual modifier transitions."
+  "Send modifier transitions to PID, or globally when PID is NIL."
   (let (events)
     (unwind-protect
          (progn
@@ -248,8 +261,32 @@
                  (cffi:foreign-funcall "CGEventSetType" :pointer event :uint32 type :void)
                  (cffi:foreign-funcall "CGEventSetFlags" :pointer event :uint64 flags :void))))
            (dolist (event (reverse events))
-             (cffi:foreign-funcall "CGEventPostToPid" :int pid :pointer event :void)))
+             (if pid
+                 (post-to-app pid event)
+                 (post-event event +tab-tag+))))
       (release-events events))))
+
+(defun dispatch-tab-switch (code type flags)
+  (multiple-value-bind (pid bundle)
+      (if *tab-switch* (values nil nil) (twigwm-macos-apps:frontmost))
+    (multiple-value-bind (consumed target events)
+        (tab-switch-step code type flags
+                         (member bundle *remote-bundles* :test #'equal) pid)
+      (when consumed
+        (cancel)
+        (post-key-chord target events)
+        t))))
+
+(defun release-tab-switch ()
+  "Release a synthetic modifier if the tap exits during a switch."
+  (when *tab-switch*
+    (let* ((switch *tab-switch*)
+           (option-p (eq (tab-switch-source switch) :option)))
+      (setf *tab-switch* nil)
+      (post-key-chord
+       (tab-switch-pid switch)
+       (append (when (tab-switch-tab-down switch) '((48 11 0)))
+               (list (list (if option-p 55 58) 12 0)))))))
 
 (defun dispatch-native-key (event pid bundle &optional local-p)
   "Consume one native action and its repeats/release, including buffered input."
@@ -295,17 +332,6 @@
           (dispatch-native-key event pid bundle t))))
      (setf (gethash code *app-down*) t))))
 
-(defun post-event (event tag)
-  ;; Re-tag the SOURCE, not just field 42: WindowServer serializes source data.
-  (let ((source (cffi:foreign-funcall "CGEventSourceCreate" :int32 -1 :pointer)))
-    (when (cffi:null-pointer-p source) (error "Cannot create replay source"))
-    (unwind-protect
-         (progn
-           (cffi:foreign-funcall "CGEventSourceSetUserData" :pointer source :int64 tag :void)
-           (cffi:foreign-funcall "CGEventSetSource" :pointer event :pointer source :void)
-           (cffi:foreign-funcall "CGEventPost" :uint32 0 :pointer event :void))
-      (release-events (list source)))))
-
 (defun service-tick ()
   (when *lease*
     (let (ready finished pid cancelled error)
@@ -345,6 +371,9 @@
          (setf *callback-error* "macOS disabled the event tap")
          event)
         ((and (not (cffi:null-pointer-p event))
+              (= (event-field event 42) +tab-tag+))
+         event)                                    ; translated local switch, never remap again
+        ((and (not (cffi:null-pointer-p event))
               (= (event-field event 42) +heartbeat-tag+))
          (setf *heartbeat* t)
          (cffi:null-pointer))
@@ -369,6 +398,10 @@
                 (native (and *live* (= type 10)
                              (or (native-key-spec code) (movement-direction code modifiers)))))
            (cond
+             ((and *live* *swap-tab-modifiers*
+                   (or *tab-switch* (= code 48))
+                   (dispatch-tab-switch code type (event-flags event)))
+              (cffi:null-pointer))
              (held
               (when (= type 11) (remhash code *app-down*))
               (cffi:null-pointer))
@@ -419,6 +452,7 @@
       ;; Do not unwind Lisp errors through Apple's callback stack.
       (setf *callback-error* (princ-to-string e))
       (cancel)
+      (ignore-errors (release-tab-switch))
       (cffi:null-pointer))))
 
 (defun probe-event (code type flags &optional (tag +test-tag+) post)
@@ -538,6 +572,7 @@
              (release-events (list source))))
       (cancel)
       (cffi:foreign-funcall "CFMachPortInvalidate" :pointer tap :void)
+      (release-tab-switch)
       (release-events (list tap)))))
 
 (defun probe ()
@@ -553,6 +588,7 @@
 (defun run (&key seconds (modifiers +command+))
   "Resident app shortcuts; SECONDS bounds a trial, NIL runs until stopped."
   (let* ((*live* t) (*lease* nil) (*prefix-modifiers* modifiers) (*escape-down* nil)
+         (*tab-switch* nil)
          (*host-prefix-p* nil)
          (apps (twigwm-apps:apps-for-mac))
          (*remote-bundles* (twigwm-apps:mac-passthrough-bundles apps))
