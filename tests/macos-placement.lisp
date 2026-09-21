@@ -286,7 +286,8 @@
           (*callback-error* nil) (*probe-seen* nil)
           (*remote-bundles* '("com.citrix.receiver.icaviewer.mac" "com.microsoft.rdc.macos"))
           (*app-down* (make-hash-table)) (*app-actions* nil) (*app-thread* nil)
-          (bundle "com.apple.finder") (fullscreen nil) (unavailable nil) (moves nil))
+          (bundle "com.apple.finder") (fullscreen nil) (unavailable nil) (moves nil)
+          (rect '(20 20 500 400)))
       (unwind-protect
            (twigwm-macos-apps::with-test-functions
                ((twigwm-macos-apps:frontmost (lambda () (values 123 bundle)))
@@ -300,6 +301,12 @@
                  (lambda (selected name)
                    (assert (twigwm-macos-apps::cf-equal selected window))
                    (assert (equal name "AXFullScreen")) fullscreen))
+                (twigwm-macos-apps::ax-pair
+                 (lambda (selected name type)
+                   (declare (ignore selected type))
+                   (if (equal name "AXPosition") (subseq rect 0 2) (subseq rect 2))))
+                (twigwm-macos-apps:screens
+                 (lambda () twigwm-macos-apps::*test-screens*))
                 (twigwm-macos-apps:move-window
                  (lambda (selected direction)
                    (assert (twigwm-macos-apps::cf-equal selected window))
@@ -319,13 +326,15 @@
                  (assert (not (probe-event 123 10 flags)))
                  (assert (not (probe-event 123 11 flags)))))
              (dolist (app *remote-bundles*)
-               (setf bundle app fullscreen t)
-               (dolist (code '(123 124 125 126))
-                 (assert (not (probe-event code 10 +command+)))
-                 (assert (not (probe-event code 11 +command+))))
+               (setf bundle app)
+               (dolist (native-fullscreen '(t nil))
+                 (setf fullscreen native-fullscreen rect '(-2560 320 2560 1440))
+                 (dolist (code '(123 124 125 126))
+                   (assert (not (probe-event code 10 +command+)))
+                   (assert (not (probe-event code 11 +command+)))))
                (assert (null *app-actions*)))
              ;; Preserve down/up already consumed if fullscreen/focus changes.
-             (setf fullscreen nil)
+             (setf fullscreen nil rect '(20 20 500 400))
              (assert (probe-event 123 10 +command+))
              (setf fullscreen t)
              (assert (probe-event 123 11 +command+))
