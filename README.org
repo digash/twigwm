@@ -68,6 +68,11 @@ the UUID. Missing displays are skipped.
 
 TwigWM remembers the region chosen by Command-arrows for each individual window.
 This state is in memory and resets when the service restarts.
+At an outer edge, an arrow fits the window back into its current region. Moves
+verify the resulting position and size, correcting resize-induced shifts and
+retrying transient Accessibility failures. Applications that round their size
+down to text cells may leave a small gap. If an application's minimum size
+exceeds the region, placement reports an error instead of recording success.
 
 * Optional remote routing
 

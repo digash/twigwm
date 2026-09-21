@@ -65,13 +65,17 @@
       ((ax-flag-p (lambda (window name) (assert (eq window :selected)) (equal name flag)))
        (ax-text (lambda (window name)
                      (assert (eq window :selected)) (assert (equal name "AXSubrole")) role))
+       (ax-pair (lambda (window name type)
+                  (declare (ignore window type))
+                  (if (equal name "AXPosition") '(0 874) '(1440 1686))))
        (ax-set-pair (lambda (window name type values)
                         (assert (eq window :selected)) (push (list name type values) calls))))
     (dotimes (i 2) (assert (eq :placed (place-window :selected '(0 874 1440 1686)))))
     (assert (equal (reverse calls)
                    (loop repeat 2 append '(("AXSize" 2 (1440 1686))
                                           ("AXPosition" 1 (0 874))
-                                          ("AXSize" 2 (1440 1686))))))
+                                          ("AXSize" 2 (1440 1686))
+                                          ("AXPosition" 1 (0 874))))))
     (setf calls nil flag "AXFullScreen")
     (assert (eq :fullscreen (place-window :selected '(0 0 1 1))))
     (setf flag "AXMinimized")
@@ -88,6 +92,9 @@
   (with-test-functions
       ((ax-flag-p (lambda (&rest args) (declare (ignore args)) nil))
        (ax-text (lambda (&rest args) (declare (ignore args)) "AXStandardWindow"))
+       (ax-pair (lambda (window name type)
+                  (declare (ignore window type))
+                  (if (equal name "AXPosition") position size)))
        (ax-set-pair
         (lambda (window name type values)
           (declare (ignore window type))
@@ -104,6 +111,42 @@
     (place-window :chrome '(0 874 1440 1686))
     (assert (equal (append position size) '(0 874 1440 1686)))))
 (format t "PASS: shrink before crossing monitors; grow again on the destination without a delay.~%")
+
+;; Applications can adjust their position while accepting the final size,
+;; round down to character cells, temporarily reject AX writes, or enforce a
+;; minimum size. Only report successful placement when the actual window fits.
+(let ((position '(100 100)) (size '(400 400)) (mode :drift) (writes 0))
+  (with-test-functions
+      ((ax-flag-p (lambda (&rest args) (declare (ignore args)) nil))
+       (ax-text (lambda (&rest args) (declare (ignore args)) "AXStandardWindow"))
+       (ax-pair (lambda (window name type)
+                  (declare (ignore window type))
+                  (if (equal name "AXPosition") position size)))
+       (ax-set-pair
+        (lambda (window name type values)
+          (declare (ignore window type))
+          (incf writes)
+          (when (and (eq mode :transient) (= writes 1))
+            (error "Transient Accessibility failure"))
+          (if (equal name "AXPosition")
+              (setf position values)
+              (progn
+                (setf size (case mode
+                             (:cells (mapcar (lambda (n) (- n 7)) values))
+                             (:minimum (list (max 1000 (first values)) (second values)))
+                             (t values)))
+                (when (eq mode :drift) (setf position '(120 120))))))))
+    (dolist (behavior '(:drift :cells :transient))
+      (setf mode behavior writes 0)
+      (assert (eq :placed (place-window :selected '(-2560 248 853 1440))))
+      (assert (equal position '(-2560 248)))
+      (assert (every #'<= size '(853 1440))))
+    (setf mode :minimum writes 0)
+    (assert (handler-case
+                (progn (place-window :selected '(-2560 248 853 1440)) nil)
+              (error (e) (search "Window did not fit" (princ-to-string e)))))
+    (assert (<= writes 12))))
+(format t "PASS: resize-induced drift corrected, cell rounding accepted, transient errors retried, impossible fits bounded and reported.~%")
 
 (let ((*placements* nil) (result :placed) (calls nil))
   (with-test-functions
@@ -123,13 +166,13 @@
       (setf result skip)
       (move-window :two :right)
       (assert (eq :portrait-main (window-region :two :portrait-main))))
-    (setf calls nil)
+    (setf calls nil result :placed)
     (move-window :one :left)
-    (assert (null calls))
-    (assert (eq :landscape-right (window-region :one :portrait-main)))
+    (assert (equal calls '((:one (-2560 351 853 1409)))))
+    (assert (eq :landscape-left (window-region :one :portrait-main)))
     (setf *placements* nil)
     (assert (eq :portrait-main (window-region :one :portrait-main)))))
-(format t "PASS: per-window choices; skipped moves/outer edges do not change memory; reset restores defaults.~%")
+(format t "PASS: per-window choices; outer edges snap to the current tile; skipped moves preserve memory; reset restores defaults.~%")
 
 (let ((calls nil)
       (app (find "vterm" twigwm-apps:*apps* :key #'twigwm-apps:app-name :test #'equal)))
