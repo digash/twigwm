@@ -434,6 +434,17 @@ No wraparound or diagonal jumps; monitor gaps and negative origins are allowed."
         (error "Cannot read ~a" name))
       (loop for i below 2 collect (cffi:mem-aref pair :double i)))))
 
+(defun remote-fullscreen-window-p (window)
+  "Recognize remote clients' borderless per-monitor windows as fullscreen."
+  (or (ax-flag-p window "AXFullScreen")
+      (let ((rect (append (ax-pair window "AXPosition" 1)
+                          (ax-pair window "AXSize" 2))))
+        (some (lambda (screen)
+                (some (lambda (bounds)
+                        (every (lambda (a b) (<= (abs (- a b)) 2)) rect bounds))
+                      (rest screen)))
+              (screens)))))
+
 (defun movable-window (pid remote-p)
   "Return an owned focused window, or NIL to pass input through.
 The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
@@ -442,7 +453,7 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
         (ax-timeout app 0.02)
         (with-cf (window (ax-get app "AXFocusedWindow"))
           (ax-timeout window 0.02)
-          (unless (and remote-p (ax-flag-p window "AXFullScreen"))
+          (unless (and remote-p (remote-fullscreen-window-p window))
             (cffi:foreign-funcall "CFRetain" :pointer window :pointer))))
     (error () nil)))
 

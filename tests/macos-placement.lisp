@@ -60,6 +60,28 @@
                    ,@body)
          (dolist (pair ,saved) (setf (symbol-function (car pair)) (cdr pair)))))))
 
+;; Windows App's multi-monitor windows report AXFullScreen=false even while
+;; covering a complete display. Their arrows belong to the remote WM.
+(let ((fullscreen nil) (rect '(-2560 320 2560 1440)))
+  (with-test-functions
+      ((ax-flag-p (lambda (window name)
+                    (declare (ignore window))
+                    (assert (equal name "AXFullScreen")) fullscreen))
+       (ax-pair (lambda (window name type)
+                  (declare (ignore window type))
+                  (if (equal name "AXPosition") (subseq rect 0 2) (subseq rect 2))))
+       (screens (lambda () *test-screens*)))
+    (assert (remote-fullscreen-window-p :selected))
+    (setf rect '(0 31 1440 2529))
+    (assert (remote-fullscreen-window-p :selected))
+    (setf rect '(0 874 1440 1686))
+    (assert (not (remote-fullscreen-window-p :selected)))
+    (setf rect '(200 200 1000 700))
+    (assert (not (remote-fullscreen-window-p :selected)))
+    (setf fullscreen t)
+    (assert (remote-fullscreen-window-p :selected))))
+(format t "PASS: borderless remote fullscreen, visible screen bounds, tiled/windowed clients, native fullscreen.~%")
+
 (let ((calls nil) (flag nil) (role "AXStandardWindow"))
   (with-test-functions
       ((ax-flag-p (lambda (window name) (assert (eq window :selected)) (equal name flag)))
