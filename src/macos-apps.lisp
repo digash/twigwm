@@ -394,7 +394,7 @@ No wraparound or diagonal jumps; monitor gaps and negative origins are allowed."
                                 (or (> shared best-overlap)
                                     (and (= shared best-overlap) (< offset best-offset))))))
               (setf best (car candidate) best-gap gap best-overlap shared best-offset offset)))))
-      best)))
+      (values best (car current)))))
 
 (defun screens ()
   (with-pool
@@ -452,13 +452,29 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
         ((ax-flag-p window "AXMinimized") :minimized)
         ((not (string= (ax-text window "AXSubrole") "AXStandardWindow")) :nonstandard)
         (t
-         ;; Shrink before crossing displays, then reapply size on the destination.
-         ;; Chrome can retain the old width if moved first; the source display
-         ;; can also constrain growth. No sleeps or retries for cell-sized apps.
-         (ax-set-pair window "AXSize" 2 (subseq rect 2))
-         (ax-set-pair window "AXPosition" 1 (subseq rect 0 2))
-         (ax-set-pair window "AXSize" 2 (subseq rect 2))
-         :placed)))
+         (let ((position (subseq rect 0 2)) (size (subseq rect 2))
+               (actual nil) (failure nil))
+           ;; Resizing can change the position, and crossing displays can clamp
+           ;; the size. Reapply both, then check what the application accepted.
+           ;; Smaller cell-sized windows are fine; spilling outside is not.
+           (loop for attempt below 3 do
+             (handler-case
+                 (progn
+                   (ax-set-pair window "AXSize" 2 size)
+                   (ax-set-pair window "AXPosition" 1 position)
+                   (ax-set-pair window "AXSize" 2 size)
+                   (ax-set-pair window "AXPosition" 1 position)
+                   (setf actual (append (ax-pair window "AXPosition" 1)
+                                        (ax-pair window "AXSize" 2))
+                         failure nil)
+                   (when (and (every #'= position (subseq actual 0 2))
+                              (every #'plusp (subseq actual 2))
+                              (every #'<= (subseq actual 2) size))
+                     (return-from place-window :placed)))
+               (error (e) (setf failure e)))
+             (when (< attempt 2) (sleep 0.05)))
+           (error "Window did not fit ~S; actual bounds ~S~@[; ~A~]"
+                  rect actual failure)))))
 
 ;;; MRU window identities, including separate windows owned by the same app.
 ;;; Only the background focus watcher and app-action worker use this lock.
@@ -526,10 +542,13 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
 (defun move-window (window direction)
   (ax-timeout window 0.2)
   (let* ((screens (screens))
-         (rect (append (ax-pair window "AXPosition" 1) (ax-pair window "AXSize" 2)))
-         (region (neighbor-region rect direction screens)))
-    (when (and region (eq :placed (place-window window (region-rect region screens))))
-      (remember-region window region))))
+         (rect (append (ax-pair window "AXPosition" 1) (ax-pair window "AXSize" 2))))
+    (multiple-value-bind (neighbor current) (neighbor-region rect direction screens)
+      ;; Even at an outer edge, restore a manually moved or oversized window to
+      ;; its tile instead of leaving it between regions or outside the screen.
+      (let ((region (or neighbor current)))
+        (when (and region (eq :placed (place-window window (region-rect region screens))))
+          (remember-region window region))))))
 
 (defun place-bundle (bundle region &optional pid)
   "Place only the selected window after launch/frame selection, without refocusing."
