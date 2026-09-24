@@ -667,7 +667,8 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
             (unless (or (null frame) (ax-flag-p window "AXMinimized")
                         (ax-flag-p window "AXFullScreen"))
               (ax-set-pair window "AXPosition" 1 (subseq frame 0 2))
-              (ax-set-pair window "AXSize" 2 (subseq frame 2))
+              ;; Floating windows such as Zoom's video strip refuse resizing.
+              (ignore-errors (ax-set-pair window "AXSize" 2 (subseq frame 2)))
               (ax-set-pair window "AXPosition" 1 (subseq frame 0 2))
               (incf count))))))
     (format t "Restored ~d windows from ~a~%" count (namestring *desktop-file*))))
