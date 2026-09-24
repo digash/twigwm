@@ -621,49 +621,56 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
 (defun window-frame (window)
   (mapcar #'round (append (ax-pair window "AXPosition" 1) (ax-pair window "AXSize" 2))))
 
+(defun read-desktop ()
+  (when (probe-file *desktop-file*)
+    (with-open-file (stream *desktop-file*)
+      (with-standard-io-syntax
+        (let ((*read-eval* nil)) (read stream))))))
+
+(defun saved-entry (entries bundle title subrole)
+  "Exact title first; otherwise the bundle's one saved window of this subrole."
+  (let ((mine (remove bundle entries :key (lambda (e) (getf e :bundle)) :test-not #'equal)))
+    (or (find title mine :key (lambda (e) (getf e :title)) :test #'equal)
+        (let ((same (remove subrole mine :key (lambda (e) (getf e :subrole))
+                                         :test-not #'equal)))
+          (when (= 1 (length same)) (first same))))))
+
 (defun save-desktop ()
-  "Write every visible window's frame to *DESKTOP-FILE*."
+  "Merge every visible window's frame into *DESKTOP-FILE*. Saved windows that
+are not open now are kept; an open window replaces the entry it would load."
   (framework "ApplicationServices")
-  (let ((entries nil))
+  (let ((kept (read-desktop)) (entries nil))
     (loop for (pid . bundle) in (running-apps) do
       (app-windows pid
         (lambda (window)
-          ;; AXUnknown covers Windows App's borderless per-display surfaces.
-          (unless (or (ax-flag-p window "AXMinimized") (ax-flag-p window "AXFullScreen")
-                      (equal (ignore-errors (ax-text window "AXSubrole")) "AXUnknown"))
-            (push (list :bundle bundle :title (ignore-errors (ax-title window))
-                        :subrole (ignore-errors (ax-text window "AXSubrole"))
-                        :frame (window-frame window))
-                  entries)))))
+          (let ((title (ignore-errors (ax-title window)))
+                (subrole (ignore-errors (ax-text window "AXSubrole"))))
+            ;; AXUnknown covers Windows App's borderless per-display surfaces.
+            (unless (or (ax-flag-p window "AXMinimized") (ax-flag-p window "AXFullScreen")
+                        (equal subrole "AXUnknown"))
+              (setf kept (remove (saved-entry kept bundle title subrole) kept :test #'eq))
+              (push (list :bundle bundle :title title :subrole subrole
+                          :frame (window-frame window))
+                    entries))))))
     (let* ((file (ensure-directories-exist *desktop-file*))
            (temporary (make-pathname :type "tmp" :defaults file)))
       (with-open-file (stream temporary :direction :output :if-exists :supersede)
-        (with-standard-io-syntax (write (reverse entries) :stream stream :pretty t)))
+        (with-standard-io-syntax
+          (write (append (reverse entries) kept) :stream stream :pretty t)))
       (uiop:rename-file-overwriting-target temporary file))
-    (format t "Saved ~d windows to ~a~%" (length entries) (namestring *desktop-file*))))
-
-(defun saved-frame (entries bundle title subrole)
-  "Exact title first; otherwise the bundle's one saved window of this subrole."
-  (let ((mine (remove bundle entries :key (lambda (e) (getf e :bundle)) :test-not #'equal)))
-    (getf (or (find title mine :key (lambda (e) (getf e :title)) :test #'equal)
-              (let ((same (remove subrole mine :key (lambda (e) (getf e :subrole))
-                                               :test-not #'equal)))
-                (when (= 1 (length same)) (first same))))
-          :frame)))
+    (format t "Saved ~d windows, kept ~d others in ~a~%"
+            (length entries) (length kept) (namestring *desktop-file*))))
 
 (defun load-desktop ()
   "Move each open window back to its saved frame; never resizes fullscreen/minimized."
   (framework "ApplicationServices")
-  (let ((entries (when (probe-file *desktop-file*)
-                   (with-open-file (stream *desktop-file*)
-                     (with-standard-io-syntax
-                       (let ((*read-eval* nil)) (read stream))))))
-        (count 0))
+  (let ((entries (read-desktop)) (count 0))
     (loop for (pid . bundle) in (running-apps) do
       (app-windows pid
         (lambda (window)
-          (let ((frame (saved-frame entries bundle (ignore-errors (ax-title window))
-                                    (ignore-errors (ax-text window "AXSubrole")))))
+          (let ((frame (getf (saved-entry entries bundle (ignore-errors (ax-title window))
+                                          (ignore-errors (ax-text window "AXSubrole")))
+                             :frame)))
             (unless (or (null frame) (ax-flag-p window "AXMinimized")
                         (ax-flag-p window "AXFullScreen"))
               (ax-set-pair window "AXPosition" 1 (subseq frame 0 2))

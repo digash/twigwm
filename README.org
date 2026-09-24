@@ -53,9 +53,10 @@ Fullscreen remote windows receive ordinary Command-arrows. The local prefix
 selects TwigWM's bindings explicitly. Placement does not resize native fullscreen
 windows, minimized windows, or dialogs.
 
-=twigwm save-desktop= writes every visible window's exact frame, floating
+=twigwm save-desktop= merges every visible window's exact frame, floating
 windows included, to =$XDG_STATE_HOME/twigwm/desktop.sexp=
-(default =~/.local/state=). =twigwm load-desktop= moves open windows back,
+(default =~/.local/state=), keeping saved windows that are not open now.
+=twigwm load-desktop= moves open windows back,
 matching by title, then by the app's only saved window of that kind.
 
 Set =twigwm-macos-input:*swap-tab-modifiers*= to =t= in your configuration to
