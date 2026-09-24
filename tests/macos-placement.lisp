@@ -373,8 +373,9 @@
                 (twigwm-macos-apps:screens
                  (lambda () twigwm-macos-apps::*test-screens*))
                 (twigwm-macos-apps:move-window
-                 (lambda (selected direction)
+                 (lambda (selected direction moved-bundle)
                    (assert (twigwm-macos-apps::cf-equal selected window))
+                   (assert (equal moved-bundle bundle))
                    (push direction moves))))
              (dolist (app (cons "com.apple.finder" *remote-bundles*))
                (setf bundle app fullscreen nil)

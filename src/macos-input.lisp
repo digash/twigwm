@@ -66,9 +66,10 @@
   (when (= modifiers +command+)
     (cdr (assoc code '((123 . :left) (124 . :right) (125 . :down) (126 . :up))))))
 
-(defun queue-window-move (pid bundle direction)
+(defun queue-window-move (pid bundle direction &optional local-p)
+  ;; After the local prefix, even a remote app's window moves instead of passing through.
   (let ((window (twigwm-macos-apps:movable-window
-                 pid (member bundle *remote-bundles* :test #'equal))))
+                 pid (and (not local-p) (member bundle *remote-bundles* :test #'equal)))))
     (when window (queue-app-action :move window direction bundle) t)))
 
 (defun release-app-action (action)
@@ -302,7 +303,7 @@
          t)
         ((= type 10)
          (let ((action (and spec (native-key-action spec modifiers (unless local-p bundle)))))
-           (when (or (and direction (queue-window-move pid (unless local-p bundle) direction)) action)
+           (when (or (and direction (queue-window-move pid bundle direction local-p)) action)
              (setf (gethash code *app-down*) t)
              (when action
                (cond ((and (consp action) (eq (first action) :launch))
