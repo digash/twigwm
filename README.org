@@ -53,6 +53,11 @@ Fullscreen remote windows receive ordinary Command-arrows. The local prefix
 selects TwigWM's bindings explicitly. Placement does not resize native fullscreen
 windows, minimized windows, or dialogs.
 
+=twigwm save-desktop= writes every visible window's exact frame, floating
+windows included, to =$XDG_STATE_HOME/twigwm/desktop.sexp=
+(default =~/.local/state=). =twigwm load-desktop= moves open windows back,
+matching by title, then by the app's only saved window of that kind.
+
 Set =twigwm-macos-input:*swap-tab-modifiers*= to =t= in your configuration to
 use Option-Tab for the native Mac app switcher and Command-Tab for Alt-Tab in
 remote apps marked =:mac-passthrough t=. Shift cycles backwards; releasing the
