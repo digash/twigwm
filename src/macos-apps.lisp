@@ -6,7 +6,8 @@
            #:frontmost #:open-bundle #:focus-windows #:open-saved-device #:place-bundle
            #:movable-window #:move-window #:reset-placements
            #:record-front-window #:previous-window #:reset-window-history
-           #:screens #:*displays* #:*regions* #:*guest-command*))
+           #:screens #:*displays* #:*regions* #:*guest-command*
+           #:save-desktop #:load-desktop #:*desktop-file*))
 (in-package :twigwm-macos-apps)
 
 (defvar *guest-command* nil)
@@ -587,3 +588,84 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
     (with-cf (text (cffi:foreign-funcall "CFUUIDCreateString"
                                          :pointer (cffi:null-pointer) :pointer uuid :pointer))
       (cf-text text))))
+
+;;; Saved desktop: exact frames of every standard window, floating ones
+;;; included, keyed by bundle and title. Unlike regions, these survive restarts.
+(defvar *desktop-file*
+  (merge-pathnames "twigwm/desktop.sexp"
+                   (or (ignore-errors (uiop:getenv-absolute-directory "XDG_STATE_HOME"))
+                       (merge-pathnames ".local/state/" (user-homedir-pathname)))))
+
+(defun running-apps ()
+  "(PID . BUNDLE) for each regular (Dock-visible) application."
+  (with-pool
+    (loop for app in (cf-items (send (send (class "NSWorkspace") "sharedWorkspace")
+                                     "runningApplications"))
+          for bundle = (send app "bundleIdentifier")
+          when (and (not (cffi:null-pointer-p bundle))
+                    (zerop (cffi:foreign-funcall "objc_msgSend" :pointer app
+                                               :pointer (selector "activationPolicy") :long)))
+            collect (cons (cffi:foreign-funcall "objc_msgSend" :pointer app
+                                              :pointer (selector "processIdentifier") :int)
+                          (cf-text bundle)))))
+
+(defun app-windows (pid function)
+  "Call FUNCTION with each of PID's borrowed AX windows; skip unresponsive apps."
+  (ignore-errors
+    (with-cf (app (cffi:foreign-funcall "AXUIElementCreateApplication" :int pid :pointer))
+      (ax-timeout app 0.2)
+      (with-cf (windows (ax-get app "AXWindows"))
+        (dolist (window (cf-items windows))
+          (ignore-errors (funcall function window)))))))
+
+(defun window-frame (window)
+  (mapcar #'round (append (ax-pair window "AXPosition" 1) (ax-pair window "AXSize" 2))))
+
+(defun save-desktop ()
+  "Write every visible window's frame to *DESKTOP-FILE*."
+  (framework "ApplicationServices")
+  (let ((entries nil))
+    (loop for (pid . bundle) in (running-apps) do
+      (app-windows pid
+        (lambda (window)
+          (unless (or (ax-flag-p window "AXMinimized") (ax-flag-p window "AXFullScreen"))
+            (push (list :bundle bundle :title (ignore-errors (ax-title window))
+                        :subrole (ignore-errors (ax-text window "AXSubrole"))
+                        :frame (window-frame window))
+                  entries)))))
+    (let* ((file (ensure-directories-exist *desktop-file*))
+           (temporary (make-pathname :type "tmp" :defaults file)))
+      (with-open-file (stream temporary :direction :output :if-exists :supersede)
+        (with-standard-io-syntax (write (nreverse entries) :stream stream :pretty t)))
+      (uiop:rename-file-overwriting-target temporary file))
+    (format t "Saved ~d windows to ~a~%" (length entries) (namestring *desktop-file*))))
+
+(defun saved-frame (entries bundle title subrole)
+  "Exact title first; otherwise the bundle's one saved window of this subrole."
+  (let ((mine (remove bundle entries :key (lambda (e) (getf e :bundle)) :test-not #'equal)))
+    (getf (or (find title mine :key (lambda (e) (getf e :title)) :test #'equal)
+              (let ((same (remove subrole mine :key (lambda (e) (getf e :subrole))
+                                               :test-not #'equal)))
+                (when (= 1 (length same)) (first same))))
+          :frame)))
+
+(defun load-desktop ()
+  "Move each open window back to its saved frame; never resizes fullscreen/minimized."
+  (framework "ApplicationServices")
+  (let ((entries (when (probe-file *desktop-file*)
+                   (with-open-file (stream *desktop-file*)
+                     (with-standard-io-syntax
+                       (let ((*read-eval* nil)) (read stream))))))
+        (count 0))
+    (loop for (pid . bundle) in (running-apps) do
+      (app-windows pid
+        (lambda (window)
+          (let ((frame (saved-frame entries bundle (ignore-errors (ax-title window))
+                                    (ignore-errors (ax-text window "AXSubrole")))))
+            (unless (or (null frame) (ax-flag-p window "AXMinimized")
+                        (ax-flag-p window "AXFullScreen"))
+              (ax-set-pair window "AXPosition" 1 (subseq frame 0 2))
+              (ax-set-pair window "AXSize" 2 (subseq frame 2))
+              (ax-set-pair window "AXPosition" 1 (subseq frame 0 2))
+              (incf count))))))
+    (format t "Restored ~d windows from ~a~%" count (namestring *desktop-file*))))
