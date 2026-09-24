@@ -4,7 +4,7 @@
   (:shadow #:class)
   (:export #:focus #:rdp-pid #:submit #:nonce #:await
            #:frontmost #:open-bundle #:focus-windows #:open-saved-device #:place-bundle
-           #:movable-window #:move-window #:reset-placements
+           #:movable-window #:move-window #:load-memory #:place-new-windows #:reset-seen
            #:record-front-window #:previous-window #:reset-window-history
            #:screens #:*displays* #:*regions* #:*guest-command*
            #:save-desktop #:load-desktop #:*desktop-file*))
@@ -302,28 +302,6 @@
 (defvar *displays* '((:main :primary 0)))
 (defvar *regions* '((:main :main 0 0 1 1)))
 
-;; Retained AX identities distinguish windows even when their titles change.
-;; No disk state: releasing these references on service restart restores defaults.
-(defvar *placements* nil)
-(defvar *placement-lock* (sb-thread:make-mutex :name "Mac placements"))
-
-(defun reset-placements ()
-  (sb-thread:with-mutex (*placement-lock*)
-    (dolist (entry *placements*)
-      (cffi:foreign-funcall "CFRelease" :pointer (car entry) :void))
-    (setf *placements* nil)))
-
-(defun window-region (window default)
-  (sb-thread:with-mutex (*placement-lock*)
-    (or (cdr (assoc window *placements* :test #'cf-equal)) default)))
-
-(defun remember-region (window region)
-  (sb-thread:with-mutex (*placement-lock*)
-    (let ((entry (assoc window *placements* :test #'cf-equal)))
-      (if entry (setf (cdr entry) region)
-          (push (cons (cffi:foreign-funcall "CFRetain" :pointer window :pointer) region)
-                *placements*)))))
-
 (defun region-rect (region screens)
   "AX (x y width height), or NIL if the assigned display is disconnected.
 SCREENS contains (UUID bounds visible-bounds), all in logical AX coordinates."
@@ -551,7 +529,7 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
                    (setf *window-history* (remove entry *window-history* :test #'eq))
                    (cffi:foreign-funcall "CFRelease" :pointer (car entry) :void)))))))
 
-(defun move-window (window direction)
+(defun move-window (window direction bundle)
   (ax-timeout window 0.2)
   (let* ((screens (screens))
          (rect (append (ax-pair window "AXPosition" 1) (ax-pair window "AXSize" 2))))
@@ -560,7 +538,7 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
       ;; its tile instead of leaving it between regions or outside the screen.
       (let ((region (or neighbor current)))
         (when (and region (eq :placed (place-window window (region-rect region screens))))
-          (remember-region window region))))))
+          (remember-window window bundle))))))
 
 (defun place-bundle (bundle region &optional pid)
   "Place only the selected window after launch/frame selection, without refocusing."
@@ -578,7 +556,8 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
                   (when (ax-flag-p app "AXFrontmost")
                     (setf window (ax-get app "AXFocusedWindow"))))))
             2 "selected app window")
-           (let ((rect (region-rect (window-region window region) (screens))))
+           (let ((rect (or (getf (window-entry window bundle) :frame)
+                           (region-rect region (screens)))))
              (if rect (place-window window rect) :no-display)))
       (when window (cffi:foreign-funcall "CFRelease" :pointer window :void)))))
 
@@ -589,8 +568,10 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
                                          :pointer (cffi:null-pointer) :pointer uuid :pointer))
       (cf-text text))))
 
-;;; Saved desktop: exact frames of every standard window, floating ones
-;;; included, keyed by bundle and title. Unlike regions, these survive restarts.
+;;; Desktop memory: exact frames keyed by bundle and title, floating windows
+;;; included. The service loads it from *DESKTOP-FILE* at start (and again when
+;;; the file changes), Command-arrow updates it, and every newly appearing window
+;;; with an entry is placed from it. Only save-desktop writes the file.
 (defvar *desktop-file*
   (merge-pathnames "twigwm/desktop.sexp"
                    (or (ignore-errors (uiop:getenv-absolute-directory "XDG_STATE_HOME"))
@@ -635,31 +616,107 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
                                          :test-not #'equal)))
           (when (= 1 (length same)) (first same))))))
 
+(defun window-description (window bundle)
+  "Identity plist for WINDOW, or NIL for windows that are never recorded or placed."
+  (let ((subrole (ignore-errors (ax-text window "AXSubrole"))))
+    ;; AXUnknown covers Windows App's borderless per-display surfaces.
+    (unless (or (ax-flag-p window "AXMinimized") (ax-flag-p window "AXFullScreen")
+                (equal subrole "AXUnknown"))
+      (list :bundle bundle :title (ignore-errors (ax-title window)) :subrole subrole))))
+
+(defun merge-entries (old new)
+  "NEW entries, then the OLD ones that no NEW window would load."
+  (dolist (entry new (append new old))
+    (setf old (remove (saved-entry old (getf entry :bundle) (getf entry :title)
+                                   (getf entry :subrole))
+                      old :test #'eq))))
+
+(defun apply-frame (window frame)
+  (ax-set-pair window "AXPosition" 1 (subseq frame 0 2))
+  ;; Floating windows such as Zoom's video strip refuse resizing.
+  (ignore-errors (ax-set-pair window "AXSize" 2 (subseq frame 2)))
+  (ax-set-pair window "AXPosition" 1 (subseq frame 0 2)))
+
+(defvar *desktop* nil)
+(defvar *desktop-date* :unread)
+(defvar *desktop-lock* (sb-thread:make-mutex :name "Mac desktop memory"))
+
+(defun desktop-memory ()
+  "The memory, reloaded whenever save-desktop has rewritten *DESKTOP-FILE*."
+  (sb-thread:with-mutex (*desktop-lock*)
+    (let ((date (ignore-errors (file-write-date *desktop-file*))))
+      (unless (eql date *desktop-date*)
+        (setf *desktop* (read-desktop) *desktop-date* date)))
+    *desktop*))
+
+(defun load-memory ()
+  (setf *desktop-date* :unread)
+  (desktop-memory))
+
+(defun window-entry (window bundle)
+  (let ((description (window-description window bundle)))
+    (when description
+      (saved-entry (desktop-memory) bundle (getf description :title)
+                   (getf description :subrole)))))
+
+(defun remember-window (window bundle)
+  "Record WINDOW's current frame in memory; the file changes only on save-desktop."
+  (let ((description (window-description window bundle)))
+    (when description
+      (desktop-memory)
+      (sb-thread:with-mutex (*desktop-lock*)
+        (setf *desktop* (merge-entries *desktop* (list (append description
+                                                               (list :frame (window-frame window))))))))))
+
+;;; Retained (WINDOW . PID) for windows already considered by the watcher.
+(defvar *seen* nil)
+
+(defun retain (object) (cffi:foreign-funcall "CFRetain" :pointer object :pointer))
+(defun release (object) (cffi:foreign-funcall "CFRelease" :pointer object :void))
+
+(defun reset-seen ()
+  (mapc #'release (mapcar #'car *seen*))
+  (setf *seen* nil))
+
+(defun place-new-windows (&optional (move t))
+  "Place each window not seen before from memory. MOVE NIL only records them,
+so a service start never rearranges what is already open."
+  (framework "ApplicationServices")
+  (let ((apps (running-apps)))
+    ;; Closed windows stay recorded until their app exits: an Accessibility
+    ;; timeout must not make an open window look new and snap it back.
+    (setf *seen* (remove-if (lambda (entry)
+                              (unless (assoc (cdr entry) apps)
+                                (release (car entry))
+                                t))
+                            *seen*))
+    (loop for (pid . bundle) in apps do
+      (app-windows pid
+        (lambda (window)
+          (unless (find window *seen* :key #'car :test #'cf-equal)
+            (push (cons (retain window) pid) *seen*)
+            (let ((frame (and move (getf (window-entry window bundle) :frame))))
+              (when frame (apply-frame window frame)))))))))
+
 (defun save-desktop ()
   "Merge every visible window's frame into *DESKTOP-FILE*. Saved windows that
 are not open now are kept; an open window replaces the entry it would load."
   (framework "ApplicationServices")
-  (let ((kept (read-desktop)) (entries nil))
+  (let ((old (read-desktop)) (entries nil))
     (loop for (pid . bundle) in (running-apps) do
       (app-windows pid
         (lambda (window)
-          (let ((title (ignore-errors (ax-title window)))
-                (subrole (ignore-errors (ax-text window "AXSubrole"))))
-            ;; AXUnknown covers Windows App's borderless per-display surfaces.
-            (unless (or (ax-flag-p window "AXMinimized") (ax-flag-p window "AXFullScreen")
-                        (equal subrole "AXUnknown"))
-              (setf kept (remove (saved-entry kept bundle title subrole) kept :test #'eq))
-              (push (list :bundle bundle :title title :subrole subrole
-                          :frame (window-frame window))
-                    entries))))))
-    (let* ((file (ensure-directories-exist *desktop-file*))
+          (let ((description (window-description window bundle)))
+            (when description
+              (push (append description (list :frame (window-frame window))) entries))))))
+    (let* ((merged (merge-entries old (reverse entries)))
+           (file (ensure-directories-exist *desktop-file*))
            (temporary (make-pathname :type "tmp" :defaults file)))
       (with-open-file (stream temporary :direction :output :if-exists :supersede)
-        (with-standard-io-syntax
-          (write (append (reverse entries) kept) :stream stream :pretty t)))
-      (uiop:rename-file-overwriting-target temporary file))
-    (format t "Saved ~d windows, kept ~d others in ~a~%"
-            (length entries) (length kept) (namestring *desktop-file*))))
+        (with-standard-io-syntax (write merged :stream stream :pretty t)))
+      (uiop:rename-file-overwriting-target temporary file)
+      (format t "Saved ~d windows, kept ~d others in ~a~%"
+              (length entries) (- (length merged) (length entries)) (namestring *desktop-file*)))))
 
 (defun load-desktop ()
   "Move each open window back to its saved frame; never resizes fullscreen/minimized."
@@ -668,14 +725,12 @@ are not open now are kept; an open window replaces the entry it would load."
     (loop for (pid . bundle) in (running-apps) do
       (app-windows pid
         (lambda (window)
-          (let ((frame (getf (saved-entry entries bundle (ignore-errors (ax-title window))
-                                          (ignore-errors (ax-text window "AXSubrole")))
-                             :frame)))
-            (unless (or (null frame) (ax-flag-p window "AXMinimized")
-                        (ax-flag-p window "AXFullScreen"))
-              (ax-set-pair window "AXPosition" 1 (subseq frame 0 2))
-              ;; Floating windows such as Zoom's video strip refuse resizing.
-              (ignore-errors (ax-set-pair window "AXSize" 2 (subseq frame 2)))
-              (ax-set-pair window "AXPosition" 1 (subseq frame 0 2))
+          (let* ((description (window-description window bundle))
+                 (frame (and description
+                             (getf (saved-entry entries bundle (getf description :title)
+                                                (getf description :subrole))
+                                   :frame))))
+            (when frame
+              (apply-frame window frame)
               (incf count))))))
     (format t "Restored ~d windows from ~a~%" count (namestring *desktop-file*))))
