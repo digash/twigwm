@@ -529,45 +529,6 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
                    (setf *window-history* (remove entry *window-history* :test #'eq))
                    (cffi:foreign-funcall "CFRelease" :pointer (car entry) :void)))))))
 
-(defun move-window (window direction bundle)
-  (ax-timeout window 0.2)
-  (let* ((screens (screens))
-         (rect (append (ax-pair window "AXPosition" 1) (ax-pair window "AXSize" 2))))
-    (multiple-value-bind (neighbor current) (neighbor-region rect direction screens)
-      ;; Even at an outer edge, restore a manually moved or oversized window to
-      ;; its tile instead of leaving it between regions or outside the screen.
-      (let ((region (or neighbor current)))
-        (when (and region (eq :placed (place-window window (region-rect region screens))))
-          (remember-window window bundle))))))
-
-(defun place-bundle (bundle region &optional pid)
-  "Place only the selected window after launch/frame selection, without refocusing."
-  (framework "ApplicationServices")
-  (let ((window nil))
-    (unwind-protect
-         (progn
-           ;; App launches are asynchronous. Poll readiness, never repeat a move.
-           (await
-            (lambda ()
-              (ignore-errors
-                (with-cf (app (cffi:foreign-funcall "AXUIElementCreateApplication"
-                                                    :int (or pid (app-pid bundle)) :pointer))
-                  (ax-timeout app 0.2)
-                  (when (ax-flag-p app "AXFrontmost")
-                    (setf window (ax-get app "AXFocusedWindow"))))))
-            2 "selected app window")
-           (let ((rect (or (getf (window-entry window bundle) :frame)
-                           (region-rect region (screens)))))
-             (if rect (place-window window rect) :no-display)))
-      (when window (cffi:foreign-funcall "CFRelease" :pointer window :void)))))
-
-(defun nonce ()
-  (framework "CoreFoundation")
-  (with-cf (uuid (cffi:foreign-funcall "CFUUIDCreate" :pointer (cffi:null-pointer) :pointer))
-    (with-cf (text (cffi:foreign-funcall "CFUUIDCreateString"
-                                         :pointer (cffi:null-pointer) :pointer uuid :pointer))
-      (cf-text text))))
-
 ;;; Desktop memory: exact frames keyed by bundle and title, floating windows
 ;;; included. The service loads it from *DESKTOP-FILE* at start (and again when
 ;;; the file changes), Command-arrow updates it, and every newly appearing window
@@ -697,6 +658,45 @@ so a service start never rearranges what is already open."
             (push (cons (retain window) pid) *seen*)
             (let ((frame (and move (getf (window-entry window bundle) :frame))))
               (when frame (apply-frame window frame)))))))))
+
+(defun move-window (window direction bundle)
+  (ax-timeout window 0.2)
+  (let* ((screens (screens))
+         (rect (append (ax-pair window "AXPosition" 1) (ax-pair window "AXSize" 2))))
+    (multiple-value-bind (neighbor current) (neighbor-region rect direction screens)
+      ;; Even at an outer edge, restore a manually moved or oversized window to
+      ;; its tile instead of leaving it between regions or outside the screen.
+      (let ((region (or neighbor current)))
+        (when (and region (eq :placed (place-window window (region-rect region screens))))
+          (remember-window window bundle))))))
+
+(defun place-bundle (bundle region &optional pid)
+  "Place only the selected window after launch/frame selection, without refocusing."
+  (framework "ApplicationServices")
+  (let ((window nil))
+    (unwind-protect
+         (progn
+           ;; App launches are asynchronous. Poll readiness, never repeat a move.
+           (await
+            (lambda ()
+              (ignore-errors
+                (with-cf (app (cffi:foreign-funcall "AXUIElementCreateApplication"
+                                                    :int (or pid (app-pid bundle)) :pointer))
+                  (ax-timeout app 0.2)
+                  (when (ax-flag-p app "AXFrontmost")
+                    (setf window (ax-get app "AXFocusedWindow"))))))
+            2 "selected app window")
+           (let ((rect (or (getf (window-entry window bundle) :frame)
+                           (region-rect region (screens)))))
+             (if rect (place-window window rect) :no-display)))
+      (when window (cffi:foreign-funcall "CFRelease" :pointer window :void)))))
+
+(defun nonce ()
+  (framework "CoreFoundation")
+  (with-cf (uuid (cffi:foreign-funcall "CFUUIDCreate" :pointer (cffi:null-pointer) :pointer))
+    (with-cf (text (cffi:foreign-funcall "CFUUIDCreateString"
+                                         :pointer (cffi:null-pointer) :pointer uuid :pointer))
+      (cf-text text))))
 
 (defun save-desktop ()
   "Merge every visible window's frame into *DESKTOP-FILE*. Saved windows that
