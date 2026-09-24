@@ -69,7 +69,7 @@
 (defun queue-window-move (pid bundle direction)
   (let ((window (twigwm-macos-apps:movable-window
                  pid (member bundle *remote-bundles* :test #'equal))))
-    (when window (queue-app-action :move window direction) t)))
+    (when window (queue-app-action :move window direction bundle) t)))
 
 (defun release-app-action (action)
   (when (eq (first action) :move)
@@ -594,7 +594,8 @@
          (*remote-bundles* (twigwm-apps:mac-passthrough-bundles apps))
          (history-stop (sb-thread:make-semaphore)) (history-thread nil)
          (*app-down* (make-hash-table)) (*app-actions* nil) (*app-thread* nil))
-    (twigwm-macos-apps:reset-placements)
+    (twigwm-macos-apps:load-memory)
+    (twigwm-macos-apps:reset-seen)
     (twigwm-macos-apps:reset-window-history)
     (unwind-protect
      (call-with-input-tap
@@ -602,7 +603,12 @@
        (setf history-thread
              (sb-thread:make-thread
               (lambda ()
-                (loop do (ignore-errors (twigwm-macos-apps:record-front-window))
+                ;; Windows already open at start are recorded, never moved.
+                (ignore-errors (twigwm-macos-apps:place-new-windows nil))
+                (loop for tick from 1
+                      do (ignore-errors (twigwm-macos-apps:record-front-window))
+                         (when (zerop (mod tick 5))
+                           (ignore-errors (twigwm-macos-apps:place-new-windows)))
                       until (sb-thread:wait-on-semaphore history-stop :timeout 0.1)))
               :name "Mac focused window history"))
        (format t "READY: native app shortcuts (~x); ~a.~%" modifiers
@@ -621,4 +627,4 @@
       (when history-thread (sb-thread:join-thread history-thread))
       (dolist (action *app-actions*) (release-app-action action))
       (twigwm-macos-apps:reset-window-history)
-      (twigwm-macos-apps:reset-placements))))
+      (twigwm-macos-apps:reset-seen))))

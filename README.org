@@ -53,11 +53,14 @@ Fullscreen remote windows receive ordinary Command-arrows. The local prefix
 selects TwigWM's bindings explicitly. Placement does not resize native fullscreen
 windows, minimized windows, or dialogs.
 
-=twigwm save-desktop= merges every visible window's exact frame, floating
-windows included, to =$XDG_STATE_HOME/twigwm/desktop.sexp=
-(default =~/.local/state=), keeping saved windows that are not open now.
-=twigwm load-desktop= moves open windows back,
-matching by title, then by the app's only saved window of that kind.
+The service keeps one window memory: exact frames, floating windows included,
+keyed by app and title (or by the app's only window of that kind). It is loaded
+from =$XDG_STATE_HOME/twigwm/desktop.sexp= (default =~/.local/state=) at start,
+and again whenever that file changes. Command-arrow records the moved window's
+frame in memory, and every window that appears later is placed from it; windows
+already open when the service starts are left where they are.
+=twigwm save-desktop= merges every visible window's frame into the file, keeping
+saved windows that are not open now. =twigwm load-desktop= moves open windows back.
 
 Set =twigwm-macos-input:*swap-tab-modifiers*= to =t= in your configuration to
 use Option-Tab for the native Mac app switcher and Command-Tab for Alt-Tab in
@@ -72,8 +75,8 @@ additional displays. A region is =(NAME DISPLAY LEFT TOP RIGHT BOTTOM)=, with
 fractional edges. A display is =(NAME UUID TOP-CLEARANCE)=; =:primary= may replace
 the UUID. Missing displays are skipped.
 
-TwigWM remembers the region chosen by Command-arrows for each individual window.
-This state is in memory and resets when the service restarts.
+A remembered frame takes precedence over the configured region when an app's
+shortcut places its window. Memory is written to disk only by =save-desktop=.
 At an outer edge, an arrow fits the window back into its current region. Moves
 verify the resulting position and size, correcting resize-induced shifts and
 retrying transient Accessibility failures. Applications that round their size
