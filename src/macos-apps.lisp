@@ -628,7 +628,9 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
     (loop for (pid . bundle) in (running-apps) do
       (app-windows pid
         (lambda (window)
-          (unless (or (ax-flag-p window "AXMinimized") (ax-flag-p window "AXFullScreen"))
+          ;; AXUnknown covers Windows App's borderless per-display surfaces.
+          (unless (or (ax-flag-p window "AXMinimized") (ax-flag-p window "AXFullScreen")
+                      (equal (ignore-errors (ax-text window "AXSubrole")) "AXUnknown"))
             (push (list :bundle bundle :title (ignore-errors (ax-title window))
                         :subrole (ignore-errors (ax-text window "AXSubrole"))
                         :frame (window-frame window))
@@ -636,7 +638,7 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
     (let* ((file (ensure-directories-exist *desktop-file*))
            (temporary (make-pathname :type "tmp" :defaults file)))
       (with-open-file (stream temporary :direction :output :if-exists :supersede)
-        (with-standard-io-syntax (write (nreverse entries) :stream stream :pretty t)))
+        (with-standard-io-syntax (write (reverse entries) :stream stream :pretty t)))
       (uiop:rename-file-overwriting-target temporary file))
     (format t "Saved ~d windows to ~a~%" (length entries) (namestring *desktop-file*))))
 
