@@ -472,4 +472,28 @@
     (uiop:delete-directory-tree (uiop:pathname-directory-pathname *desktop-file*)
                                 :validate t :if-does-not-exist :ignore)))
 (format t "PASS: save/load desktop round-trips a floating window's frame; saving merges, keeping closed windows.~%")
+(in-package :twigwm-macos-apps)
+;; Windows that refuse AXSize are resized by a corner drag; others never see the mouse.
+(let ((frame (list 0 0 240 135)) (refuse t) (events nil))
+  (with-test-functions
+      ((window-frame (lambda (w) (declare (ignore w)) (copy-list frame)))
+       (ax-set-pair (lambda (w name type values)
+                      (declare (ignore w type))
+                      (if (equal name "AXPosition")
+                          (setf (subseq frame 0 2) values)
+                          (unless refuse (setf (subseq frame 2) values)))))
+       (pause (lambda (seconds) (declare (ignore seconds))))
+       (mouse (lambda (kind x y)
+                (push (list kind x y) events)
+                ;; Model Zoom: a drag from the handle resizes to the release point.
+                (when (= kind 2) (setf (subseq frame 2) (list (+ x 3) (+ y 3)))))))
+    (apply-frame :zoom '(0 0 640 360))
+    (assert (equal frame '(0 0 640 360)))
+    (assert (equal (first (last events)) '(5 237 132)))  ; grab 3 pt inside the corner
+    (assert (equal (first events) '(2 637 357)))
+    (setf events nil refuse nil frame (list 0 0 100 100))
+    (apply-frame :chrome '(5 5 300 200))
+    (assert (equal frame '(5 5 300 200)))
+    (assert (null events))))
+(format t "PASS: refused resizes fall back to a corner drag; resizable windows are never dragged.~%")
 (format t "PLACEMENT_TESTS_COMPLETE~%")

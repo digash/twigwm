@@ -592,10 +592,40 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
                                    (getf entry :subrole))
                       old :test #'eq))))
 
+(defun mouse (kind x y)
+  "Post one left-button event: KIND 1 down, 2 up, 5 moved, 6 dragged."
+  ;; CGPoint is two doubles, passed like two double arguments on ARM and Intel.
+  (with-cf (event (cffi:foreign-funcall "CGEventCreateMouseEvent" :pointer (cffi:null-pointer)
+                                        :uint32 kind :double (coerce x 'double-float)
+                                        :double (coerce y 'double-float) :uint32 0 :pointer))
+    (cffi:foreign-funcall "CGEventPost" :uint32 0 :pointer event :void)))
+
+(defun pause (seconds) (sleep seconds))
+
+(defun drag-size (window frame)
+  "Resize WINDOW, already moved to FRAME's origin, by dragging its bottom-right
+corner as a user would. For windows such as Zoom's video strip that accept a
+drag but refuse Accessibility resizing."
+  (destructuring-bind (x y width height) frame
+    ;; Only the size is read back: the origin is FRAME's, where the window now is.
+    ;; The resize handle starts a few points inside the corner.
+    (destructuring-bind (old-width old-height) (subseq (window-frame window) 2)
+      (let ((from-x (+ x old-width -3)) (from-y (+ y old-height -3))
+            (to-x (+ x width -3)) (to-y (+ y height -3)))
+        (mouse 5 from-x from-y) (pause 0.1)
+        (mouse 1 from-x from-y) (pause 0.1)
+        (loop for i from 1 to 20
+              do (mouse 6 (+ from-x (* i (/ (- to-x from-x) 20)))
+                        (+ from-y (* i (/ (- to-y from-y) 20))))
+                 (pause 0.02))
+        (mouse 2 to-x to-y)
+        (pause 0.3)))))
+
 (defun apply-frame (window frame)
   (ax-set-pair window "AXPosition" 1 (subseq frame 0 2))
-  ;; Floating windows such as Zoom's video strip refuse resizing.
   (ignore-errors (ax-set-pair window "AXSize" 2 (subseq frame 2)))
+  (unless (equal (subseq (window-frame window) 2) (subseq frame 2))
+    (drag-size window frame))
   (ax-set-pair window "AXPosition" 1 (subseq frame 0 2)))
 
 (defvar *desktop* nil)
