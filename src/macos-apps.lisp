@@ -484,15 +484,19 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
       (setf entry (cons (cffi:foreign-funcall "CFRetain" :pointer window :pointer) pid)))
     (setf *window-history* (cons entry (remove entry *window-history* :test #'eq)))))
 
-(defun record-front-window ()
-  "Record only a responsive, focused standard window. Never move it."
+(defun record-front-window (&optional skip-bundles)
+  "Record only a responsive, focused standard window. Never move it.
+Windows of SKIP-BUNDLES, such as remote sessions, are never recorded: :SKIPPED."
   (sb-thread:with-mutex (*window-history-lock*)
-    (let* ((pid (frontmost)) (window (movable-window pid nil)))
-      (when window
-        (with-cf (selected window)
-          (when (equal (ax-text selected "AXSubrole") "AXStandardWindow")
-            (note-window selected pid)
-            t))))))
+    (multiple-value-bind (pid bundle) (frontmost)
+      (if (member bundle skip-bundles :test #'equal)
+          :skipped
+          (let ((window (movable-window pid nil)))
+            (when window
+              (with-cf (selected window)
+                (when (equal (ax-text selected "AXSubrole") "AXStandardWindow")
+                  (note-window selected pid)
+                  t))))))))
 
 (defun raise-window (window pid)
   "Raise the exact existing window without resizing or launching an application."
@@ -513,11 +517,16 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
                          (cf-equal focused window))))
                 1 "previous window focus"))))
 
-(defun previous-window ()
+(defun previous-window (&optional skip-bundles)
+  "Raise the last recorded window other than the focused one. SKIP-BUNDLES
+are never recorded, so from a remote session this is the last local window."
   ;; Refresh now so a rapid switch followed by the prefix uses the current window.
-  (when (record-front-window)
+  (let ((recorded (record-front-window skip-bundles)))
+    (when recorded
     (sb-thread:with-mutex (*window-history-lock*)
-      (loop for entry = (second *window-history*)
+      (loop for entry = (if (eq recorded :skipped)
+                            (first *window-history*)
+                            (second *window-history*))
             while entry
             do (handler-case
                    (progn
@@ -527,7 +536,7 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
                  (error ()
                    ;; Closed windows and exited apps cannot be selected again.
                    (setf *window-history* (remove entry *window-history* :test #'eq))
-                   (cffi:foreign-funcall "CFRelease" :pointer (car entry) :void)))))))
+                   (cffi:foreign-funcall "CFRelease" :pointer (car entry) :void))))))))
 
 ;;; Desktop memory: exact frames keyed by bundle and title, floating windows
 ;;; included. The service loads it from *DESKTOP-FILE* at start (and again when
