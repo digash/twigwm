@@ -82,9 +82,6 @@
 (defun number-p (code modifiers)
   (and (number-key code) (= modifiers +command+)))
 
-(defun number-device (code)
-  (or (and (= code 29) *zero-device*) *number-device*))
-
 (defun native-key-spec (code)
   "Find the native binding for a macOS virtual keycode."
   (loop for key in twigwm-keys:*keys* for mac = (twigwm-keys:key-mac key)
@@ -418,7 +415,15 @@
               (if (member (nth-value 1 (twigwm-macos-apps:frontmost))
                           *remote-bundles* :test #'equal)
                   event
-                  (if (dispatch-number event (number-device code)) (cffi:null-pointer) event)))
+                  (cond ((and (= code 29) *zero-device*)
+                         ;; Only select it: a second Command-0, now inside the
+                         ;; session, is what passes the key through.
+                         (cancel)
+                         (setf (gethash code *app-down*) t)
+                         (queue-app-action :saved-device *zero-device*)
+                         (cffi:null-pointer))
+                        ((dispatch-number event) (cffi:null-pointer))
+                        (t event))))
              (native
               (multiple-value-bind (pid bundle) (twigwm-macos-apps:frontmost)
                 (if (dispatch-native-key event pid bundle) (cffi:null-pointer) event)))
