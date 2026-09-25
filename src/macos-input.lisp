@@ -4,7 +4,7 @@
 (load (merge-pathnames "keys.lisp" *load-truename*))
 (defpackage :twigwm-macos-input
   (:use :cl)
-  (:export #:probe #:run #:*number-device* #:*prefix-number-device*
+  (:export #:probe #:run #:*number-device* #:*zero-device*
            #:*swap-tab-modifiers*))
 (in-package :twigwm-macos-input)
 (load (merge-pathnames "macos-tab.lisp" *load-truename*))
@@ -50,10 +50,9 @@
 (defvar *live* nil)
 (defvar *prefix-modifiers* +command+)
 (defvar *escape-down* nil)
-(defvar *host-prefix-p* nil)
 (defvar *lease* nil)
 (defvar *number-device* nil)
-(defvar *prefix-number-device* nil)
+(defvar *zero-device* nil)
 (defvar *remote-bundles* nil)
 (defvar *app-down* (make-hash-table))
 (defvar *app-actions* nil)
@@ -82,6 +81,9 @@
 
 (defun number-p (code modifiers)
   (and (number-key code) (= modifiers +command+)))
+
+(defun number-device (code)
+  (or (and (= code 29) *zero-device*) *number-device*))
 
 (defun native-key-spec (code)
   "Find the native binding for a macOS virtual keycode."
@@ -119,7 +121,7 @@
 
 (defun service-apps ()
   (when (and *app-actions* (not (and *app-thread* (sb-thread:thread-alive-p *app-thread*))))
-    (let ((action (pop *app-actions*)))
+    (let ((action (pop *app-actions*)) (remote *remote-bundles*))
       (setf *app-thread*
             (sb-thread:make-thread
              (lambda ()
@@ -129,7 +131,7 @@
                           (:activate (apply #'activate-app (rest action)))
                           (:launch (apply #'launch-native-command (rest action)))
                           (:saved-device (apply #'twigwm-macos-apps:open-saved-device (rest action)))
-                          (:previous-window (twigwm-macos-apps:previous-window))
+                          (:previous-window (twigwm-macos-apps:previous-window remote))
                           (:move (apply #'twigwm-macos-apps:move-window (rest action))))
                       (error (e) (format *error-output* "App shortcut failed: ~a~%" e)))
                  (release-app-action action)))
@@ -180,7 +182,6 @@
     (cffi:foreign-funcall "CFRelease" :pointer event :void)))
 
 (defun cancel ()
-  (setf *host-prefix-p* nil)
   (when *lease*
     (sb-thread:with-mutex ((lease-lock *lease*)) (setf (lease-cancelled *lease*) t)))
   (release-events (finish *handoff* (handoff-generation *handoff*))))
@@ -313,26 +314,6 @@
                      (t (queue-app-action :activate nil action))))
              t)))))))
 
-(defun dispatch-host-key (event code modifiers)
-  "Consume one local shortcut after Super-Escape, including unbound keys."
-  (setf *host-prefix-p* nil)
-  (cond
-    ((number-p code modifiers)
-     (dispatch-number event (or *prefix-number-device* *number-device*)))
-    (t
-     (cond
-       ((and (= code 53) (= modifiers *prefix-modifiers*))
-        (queue-app-action :previous-window))
-       ((and (= code 53) (zerop modifiers))
-        ;; Like StumpWM's C-t t: send the prefix itself to the focused app.
-        (post-key-chord (twigwm-macos-apps:frontmost)
-                        '((55 12 #x100008) (53 10 #x100008)
-                          (53 11 #x100008) (55 12 0))))
-       ((or (native-key-spec code) (movement-direction code modifiers))
-        (multiple-value-bind (pid bundle) (twigwm-macos-apps:frontmost)
-          (dispatch-native-key event pid bundle t))))
-     (setf (gethash code *app-down*) t))))
-
 (defun service-tick ()
   (when *lease*
     (let (ready finished pid cancelled error)
@@ -413,13 +394,12 @@
              ((and (= code 53) *escape-down*)
               (when (= type 11) (setf *escape-down* nil))
               (cffi:null-pointer))
-             ((and *live* (not *host-prefix-p*) (= type 10) (= code 53)
-                   (= modifiers *prefix-modifiers*))
+             ((and *live* (= type 10) (= code 53) (= modifiers *prefix-modifiers*))
+              ;; One press returns to the last local window, even from a remote
+              ;; session; the clause above consumes its repeats and release.
               (cancel)
-              (setf *escape-down* t *host-prefix-p* t)
-              (cffi:null-pointer))
-             ((and *live* *host-prefix-p* (= type 10))
-              (dispatch-host-key event code modifiers)
+              (setf *escape-down* t)
+              (queue-app-action :previous-window)
               (cffi:null-pointer))
              ((and (not *live*) (= type 10) (= code 53) (= modifiers *prefix-modifiers*))
               ;; The isolated event-tap probe still needs a capture trigger.
@@ -438,7 +418,7 @@
               (if (member (nth-value 1 (twigwm-macos-apps:frontmost))
                           *remote-bundles* :test #'equal)
                   event
-                  (if (dispatch-number event) (cffi:null-pointer) event)))
+                  (if (dispatch-number event (number-device code)) (cffi:null-pointer) event)))
              (native
               (multiple-value-bind (pid bundle) (twigwm-macos-apps:frontmost)
                 (if (dispatch-native-key event pid bundle) (cffi:null-pointer) event)))
@@ -584,9 +564,9 @@
   "Resident app shortcuts; SECONDS bounds a trial, NIL runs until stopped."
   (let* ((*live* t) (*lease* nil) (*prefix-modifiers* modifiers) (*escape-down* nil)
          (*tab-switch* nil)
-         (*host-prefix-p* nil)
          (apps (twigwm-apps:apps-for-mac))
          (*remote-bundles* (twigwm-apps:mac-passthrough-bundles apps))
+         (remote *remote-bundles*)
          (history-stop (sb-thread:make-semaphore)) (history-thread nil)
          (*app-down* (make-hash-table)) (*app-actions* nil) (*app-thread* nil))
     (twigwm-macos-apps:load-memory)
@@ -601,7 +581,7 @@
                 ;; Windows already open at start are recorded, never moved.
                 (ignore-errors (twigwm-macos-apps:place-new-windows nil))
                 (loop for tick from 1
-                      do (ignore-errors (twigwm-macos-apps:record-front-window))
+                      do (ignore-errors (twigwm-macos-apps:record-front-window remote))
                          (when (zerop (mod tick 5))
                            (ignore-errors (twigwm-macos-apps:place-new-windows)))
                       until (sb-thread:wait-on-semaphore history-stop :timeout 0.1)))

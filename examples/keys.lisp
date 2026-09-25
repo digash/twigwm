@@ -3,14 +3,12 @@
    ;;; window / app switching
    (make-key
     :action :host-escape
-    :doc "Return to the local host. StumpWM owns s-Escape as its local prefix.
-On macOS ⌘-Escape consumes the chord and reads one local TwigWM shortcut.
-⌘-Escape twice selects the previous individual Mac window.
-⌘-Escape then bare Escape sends ⌘-Escape to the focused app; Ctrl-G cancels.
-⌘-0 opens the existing secondary saved device in Windows App and is consumed on the Mac.
-From native Mac apps, ⌘-1 through ⌘-9 open the saved desktop device and
-send Super-number. Inside remote-session apps those keys pass through unchanged,
-unless preceded by ⌘-Escape, which forces TwigWM's desktop assignment.
+    :doc "Return to the local host. StumpWM's s-Escape returns to the last local window.
+On macOS ⌘-Escape returns to the previous individual Mac window; from a
+remote-session app it returns to the last local one, never another remote window.
+From native Mac apps, ⌘-1 through ⌘-9 open the saved desktop device and send
+Super-number; ⌘-0 does the same with the secondary device. Inside remote-session
+apps those keys pass through unchanged.
 The platform slots are deliberately NIL."
     :ahk '("#Escape" . "return"))
 

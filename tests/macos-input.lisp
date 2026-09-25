@@ -102,7 +102,7 @@
 (let ((frontmost (symbol-function 'twigwm-macos-apps:frontmost))
       (post-chord (symbol-function 'post-key-chord))
       (*handoff* (make-handoff)) (*lease* (make-lease))
-      (*host-prefix-p* t) (*tab-switch* nil)
+      (*tab-switch* nil)
       (*remote-bundles* '("com.microsoft.rdc.macos")) (posted nil))
   (unwind-protect
        (progn
@@ -114,7 +114,6 @@
          (assert (dispatch-tab-switch 48 10 #x100008))
          (assert (lease-cancelled-p *lease*))
          (assert (not (handoff-pending *handoff*)))
-         (assert (not *host-prefix-p*))
          (assert (equal (first posted)
                         '(123 ((55 12 0) (58 12 #x80020) (48 10 #x80020)))))
          (release-tab-switch)
@@ -139,7 +138,7 @@
              (assert (not *callback-error*)))))
     (setf (symbol-function 'twigwm-macos-apps:frontmost) frontmost
           (symbol-function 'post-key-chord) post-chord)))
-(format t "PASS: Tab adapter routing, prefix/handoff cancellation, and shutdown releases.~%")
+(format t "PASS: Tab adapter routing, handoff cancellation, and shutdown releases.~%")
 
 
 ;; Native callback routing, with no worker, guest command, or app delivery.
@@ -149,8 +148,7 @@
         (post (symbol-function 'post-to-app)))
     (unwind-protect
          (loop for code across #(29 18 19 20 21 23 22 26 28 25) do
-           (let ((*live* t) (*handoff* (make-handoff)) (*lease* nil)
-                 (*escape-down* nil) (*host-prefix-p* nil)
+           (let ((*live* t) (*handoff* (make-handoff)) (*lease* nil) (*escape-down* nil)
                  (*callback-error* nil) (*probe-seen* nil)
                  (*remote-bundles* '("com.microsoft.rdc.macos" "com.citrix.receiver.icaviewer.mac"))
                  (bundle "com.microsoft.rdc.macos")
@@ -166,131 +164,60 @@
                    (lambda (pid event)
                      (assert (= 123 pid))
                      (push (event-description event) posted)))
-             (labels ((prefix ()
-                        (assert (probe-event 53 10 +command+))
-                        (assert (probe-event 53 10 +command+)) ; repeat
-                        (assert (probe-event 53 11 0)) ; Command may release first
-                        (assert *host-prefix-p*)
-                        (assert (null posted)))
-                      (finish-transfer ()
-                        (setf (lease-finished *lease*) t (lease-ready *lease*) t
-                              (lease-pid *lease*) 123
-                              (lease-bundle *lease*) "com.microsoft.rdc.macos")
-                        (service-tick)
-                        (assert (null *lease*))
-                        (assert (not (handoff-pending *handoff*)))))
-               ;; Ordinary remote numbers retain guest ownership.
-               (dolist (remote *remote-bundles*)
-                 (setf bundle remote)
-                 (dolist (type '(10 10 11))
-                   (multiple-value-bind (consumed description)
-                       (probe-event code type +command+)
-                     (assert (not consumed))
-                     (assert (equal description (list code type +command+)))))
-                 ;; After the local prefix, force the prefix-number assignment.
-                 (prefix)
-                 (assert (not (probe-event 55 12 0)))
-                 (assert (not (probe-event 55 12 +command+)))
-                 (assert *host-prefix-p*)
-                 (assert (probe-event code 10 +command+))
-                 (assert (not *host-prefix-p*))
-                 (assert (probe-event code 11 +command+))
-                 (assert (probe-event 55 12 0))
-                 (finish-transfer)
-                 (assert (equal (reverse posted)
-                                `((55 12 ,+command+) (,code 10 ,+command+)
-                                  (,code 11 ,+command+) (55 12 0))))
-                 (assert (null *app-actions*))
-                 (setf posted nil))
-               (assert (equal targets '("secondary" "secondary")))
-               ;; Native Mac numbers keep using the existing desktop rule.
-               (setf bundle "com.apple.finder" targets nil)
-               (assert (probe-event code 10 +command+))
-               (assert (probe-event code 11 +command+))
-               ;; A prefix takes over even while the previous number is queued.
-               (let ((old *lease*))
-                 (prefix)
-                 (assert (lease-cancelled-p old))
-                 (assert (not (handoff-pending *handoff*)))
-                 (assert (probe-event 18 10 +command+))
-                 (assert (not (eq old *lease*))))
-               (assert (probe-event 18 11 +command+))
-               (assert (probe-event 55 12 0))
-               (assert (equal targets '("secondary" "desktop")))
-               (finish-transfer)
-               (assert (equal (reverse posted)
-                              `((55 12 ,+command+) (18 10 ,+command+)
-                                (18 11 ,+command+) (55 12 0))))
-               (assert (not *callback-error*))
-               (cancel))))
+             ;; Ordinary remote numbers retain guest ownership.
+             (dolist (remote *remote-bundles*)
+               (setf bundle remote)
+               (dolist (type '(10 10 11))
+                 (multiple-value-bind (consumed description)
+                     (probe-event code type +command+)
+                   (assert (not consumed))
+                   (assert (equal description (list code type +command+))))))
+             (assert (null targets))
+             ;; Native Mac numbers route to their device; zero has its own.
+             (setf bundle "com.apple.finder")
+             (assert (probe-event code 10 +command+))
+             (assert (probe-event code 11 +command+))
+             (assert (probe-event 55 12 0))
+             (assert (equal targets (list (if (= code 29) "secondary" "desktop"))))
+             (setf (lease-finished *lease*) t (lease-ready *lease*) t
+                   (lease-pid *lease*) 123 (lease-bundle *lease*) "com.microsoft.rdc.macos")
+             (service-tick)
+             (assert (null *lease*))
+             (assert (equal (reverse posted)
+                            `((55 12 ,+command+) (,code 10 ,+command+)
+                              (,code 11 ,+command+) (55 12 0))))
+             (assert (not *callback-error*))
+             (cancel)))
       (setf (symbol-function 'start-transfer) start
             (symbol-function 'twigwm-macos-apps:frontmost) frontmost
             (symbol-function 'post-to-app) post)))
-  (format t "PASS: local Escape consumes its chord, routes prefixed numbers to secondary, preserves ordinary remote keys, and replaces queued input.~%"))
+  (format t "PASS: remote numbers pass through; native numbers route, zero to its own device.~%"))
 
-;; The local reader consumes unknown keys and supports cancellation and native actions.
+;; Command-Escape is one local action: previous window, consumed, even from a remote.
 (when (uiop:os-macosx-p)
   (let ((frontmost (symbol-function 'twigwm-macos-apps:frontmost))
-        (post-chord (symbol-function 'post-key-chord)) (chords nil)
-        (*live* t) (*handoff* (make-handoff)) (*lease* nil)
-        (*escape-down* nil) (*host-prefix-p* nil)
-        (*callback-error* nil) (*probe-seen* nil)
+        (*live* t) (*handoff* (make-handoff)) (*lease* (make-lease))
+        (*escape-down* nil) (*callback-error* nil) (*probe-seen* nil)
         (*remote-bundles* '("com.microsoft.rdc.macos"))
         (*app-down* (make-hash-table)) (*app-actions* nil))
     (unwind-protect
          (progn
            (setf (symbol-function 'twigwm-macos-apps:frontmost)
-                 (lambda () (values 123 "com.microsoft.rdc.macos"))
-                 (symbol-function 'post-key-chord)
-                 (lambda (pid chord) (push (list pid chord) chords)))
-           (flet ((prefix ()
-                    (assert (probe-event 53 10 +command+))
-                    (assert (probe-event 53 11 +command+))
-                    (assert *host-prefix-p*)))
-             ;; The complete prefix repeated selects the previous individual window.
-             (prefix)
-             (assert (probe-event 53 10 +command+))
-             (assert (probe-event 53 10 +command+)) ; no repeated switching while held
-             (assert (probe-event 53 11 +command+))
-             (assert (not *host-prefix-p*))
-             (assert (equal *app-actions* '((:previous-window))))
-             (setf *app-actions* nil)
-             (prefix)
-             (dolist (type '(10 10 11)) (assert (probe-event 0 type 0))) ; unbound A
-             (assert (not *host-prefix-p*))
-             (assert (not (probe-event 0 10 0))) ; next key goes to the app
-             (assert (not (probe-event 0 11 0)))
-             (prefix)
-             (assert (probe-event 53 10 0)) ; bare Escape sends the prefix
-             (assert (probe-event 53 10 0)) ; held repeat is consumed
-             (assert (probe-event 53 11 0))
-             (assert (equal chords '((123 ((55 12 #x100008) (53 10 #x100008)
-                                          (53 11 #x100008) (55 12 0))))))
-             (assert (not *host-prefix-p*))
-             (prefix)
-             (assert (probe-event 5 10 #x40000)) ; Control-G cancels
-             (assert (probe-event 5 11 #x40000))
-             (assert (= 1 (length chords)))
-             (assert (not *host-prefix-p*))
-             (prefix)
-             (assert (not (probe-event 48 10 +command+))) ; native Command-Tab
-             (assert (not *host-prefix-p*))
-             (prefix)
-             (cancel) ; the click path calls the same cancellation
-             (assert (not *host-prefix-p*))
-             ;; Local art/screenshot bypass the focused remote's passthrough/chord.
-             (prefix)
-             (dolist (type '(10 10 11)) (assert (probe-event 37 type +command+)))
-             (assert (eq :launch (caar *app-actions*)))
-             (assert (= 1 (length *app-actions*)))
-             (setf *app-actions* nil)
-             (prefix)
-             (dolist (type '(10 10 11)) (assert (probe-event 105 type 0)))
-             (assert (equal *app-actions* '((:activate nil "com.apple.screenshot.launcher"))))
-             (assert (not *callback-error*))
-             (assert (zerop (hash-table-count *app-down*)))))
+                 (lambda () (values 123 "com.microsoft.rdc.macos")))
+           (arm *handoff*)
+           (assert (probe-event 53 10 +command+))
+           (assert (probe-event 53 10 +command+)) ; held repeat does not switch again
+           (assert (probe-event 53 11 +command+))
+           (assert (equal *app-actions* '((:previous-window))))
+           (assert (lease-cancelled-p *lease*)) ; and cancels a pending handoff
+           (assert (not (handoff-pending *handoff*)))
+           (setf *app-actions* nil)
+           (assert (not (probe-event 18 10 +command+))) ; next number goes to the remote
+           (assert (not (probe-event 53 10 0)))         ; bare Escape stays with the app
+           (assert (not (probe-event 53 11 0)))
+           (assert (null *app-actions*))
+           (assert (not *callback-error*)))
       (cancel)
-      (setf (symbol-function 'twigwm-macos-apps:frontmost) frontmost
-            (symbol-function 'post-key-chord) post-chord)))
-  (format t "PASS: previous-window prefix, prefix forwarding, unknown keys, Control-G/Tab/click cancellation, and local art/screenshots.~%"))
+      (setf (symbol-function 'twigwm-macos-apps:frontmost) frontmost)))
+  (format t "PASS: Command-Escape returns at once, consumes repeats, cancels handoffs, and leaves other keys alone.~%"))
 (format t "MACOS_INPUT_COMPLETE~%")

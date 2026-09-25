@@ -41,16 +41,13 @@ This installs the per-user =org.twigwm.input= LaunchAgent. Its log is
 
 - Command-1 through Command-9 run or raise the assigned application.
 - Command-arrow moves the focused window between configured regions.
-- Command-Escape consumes the chord and reads one local TwigWM shortcut,
-  including when a remote desktop has captured the keyboard.
-- Command-Escape twice selects the previous individual window, including
-  another window of the same application.
-- Command-Escape then bare Escape sends Command-Escape to the focused app.
-- Control-G, Command-Tab, or a mouse click cancels the local prefix.
+- Command-Escape returns at once to the previous individual window, including
+  another window of the same application. From a remote session (an app
+  marked =:mac-passthrough t=) it returns to the last local window, even when
+  the session has captured the keyboard; remote windows are never recorded.
 
 Remote applications marked =:mac-passthrough t= receive ordinary number keys.
-Fullscreen remote windows receive ordinary Command-arrows. The local prefix
-selects TwigWM's bindings explicitly. Placement does not resize native fullscreen
+Fullscreen remote windows receive ordinary Command-arrows. Placement does not resize native fullscreen
 windows, minimized windows, or dialogs.
 
 The service keeps one window memory: exact frames, floating windows included,
@@ -66,7 +63,7 @@ Set =twigwm-macos-input:*swap-tab-modifiers*= to =t= in your configuration to
 use Option-Tab for the native Mac app switcher and Command-Tab for Alt-Tab in
 remote apps marked =:mac-passthrough t=. Shift cycles backwards; releasing the
 physical modifier selects. Command-Tab outside remote apps stays native.
-Either switcher cancels the local prefix and pending keyboard handoff.
+Either switcher cancels a pending keyboard handoff.
 The remote target remains fixed until release. Other shortcuts are unchanged.
 
 The example splits the primary display into left one third and right two thirds.
@@ -87,8 +84,7 @@ exceeds the region, placement reports an error instead of recording success.
 
 Set =twigwm-macos-input:*number-device*= to a Windows App saved-device name to
 route Command-0 through Command-9 to that device, then forward the same shortcut.
-Set =*prefix-number-device*= to send those keys after the local prefix to a
-different saved device.
+Set =*zero-device*= to route Command-0 to a different saved device instead.
 Both default to NIL. These names, application assignments, commands, and display
 UUIDs belong in your local configuration, not in the project sources.
 
@@ -110,9 +106,8 @@ It does not install a Windows login policy or change idle-lock behavior.
 =session= starts StumpWM unless =twigwm:*session-function*= is configured.
 
 StumpWM can load =src/apps.lisp= and =src/keys.lisp=, followed by local tables,
-without loading the macOS event tap. TwigWM does not replace StumpWM's own
-prefix implementation; forwarding Command-Escape allows a configured remote
-StumpWM to handle its host prefix.
+without loading the macOS event tap. Command-Escape is consumed on the Mac and
+never reaches a remote StumpWM.
 
 * Tests
 
