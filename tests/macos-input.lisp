@@ -147,7 +147,7 @@
         (frontmost (symbol-function 'twigwm-macos-apps:frontmost))
         (post (symbol-function 'post-to-app)))
     (unwind-protect
-         (loop for code across #(29 18 19 20 21 23 22 26 28 25) do
+         (loop for code across #(18 19 20 21 23 22 26 28 25) do
            (let ((*live* t) (*handoff* (make-handoff)) (*lease* nil) (*escape-down* nil)
                  (*callback-error* nil) (*probe-seen* nil)
                  (*remote-bundles* '("com.microsoft.rdc.macos" "com.citrix.receiver.icaviewer.mac"))
@@ -173,12 +173,12 @@
                    (assert (not consumed))
                    (assert (equal description (list code type +command+))))))
              (assert (null targets))
-             ;; Native Mac numbers route to their device; zero has its own.
+             ;; Native Mac numbers route to the device and forward the key.
              (setf bundle "com.apple.finder")
              (assert (probe-event code 10 +command+))
              (assert (probe-event code 11 +command+))
              (assert (probe-event 55 12 0))
-             (assert (equal targets (list (if (= code 29) "secondary" "desktop"))))
+             (assert (equal targets '("desktop")))
              (setf (lease-finished *lease*) t (lease-ready *lease*) t
                    (lease-pid *lease*) 123 (lease-bundle *lease*) "com.microsoft.rdc.macos")
              (service-tick)
@@ -191,7 +191,33 @@
       (setf (symbol-function 'start-transfer) start
             (symbol-function 'twigwm-macos-apps:frontmost) frontmost
             (symbol-function 'post-to-app) post)))
-  (format t "PASS: remote numbers pass through; native numbers route, zero to its own device.~%"))
+  (format t "PASS: remote numbers pass through; native numbers route and forward.~%"))
+
+;; From a native app Command-0 only selects its device; inside the session it passes.
+(when (uiop:os-macosx-p)
+  (let ((frontmost (symbol-function 'twigwm-macos-apps:frontmost))
+        (start (symbol-function 'start-transfer)) (bundle "com.apple.finder")
+        (*live* t) (*handoff* (make-handoff)) (*lease* nil)
+        (*escape-down* nil) (*callback-error* nil) (*probe-seen* nil)
+        (*remote-bundles* '("com.microsoft.rdc.macos"))
+        (*app-down* (make-hash-table)) (*app-actions* nil))
+    (unwind-protect
+         (progn
+           (setf (symbol-function 'twigwm-macos-apps:frontmost) (lambda () (values 123 bundle))
+                 (symbol-function 'start-transfer) (lambda (&rest args) (error "transfer ~s" args)))
+           (assert (probe-event 29 10 +command+))
+           (assert (probe-event 29 10 +command+)) ; held repeat does not reopen it
+           (assert (probe-event 29 11 +command+))
+           (assert (equal *app-actions* '((:saved-device "secondary"))))
+           (assert (not (handoff-pending *handoff*)))
+           (setf bundle "com.microsoft.rdc.macos" *app-actions* nil)
+           (assert (not (probe-event 29 10 +command+))) ; second press reaches the session
+           (assert (not (probe-event 29 11 +command+)))
+           (assert (null *app-actions*))
+           (assert (not *callback-error*)))
+      (setf (symbol-function 'twigwm-macos-apps:frontmost) frontmost
+            (symbol-function 'start-transfer) start)))
+  (format t "PASS: Command-0 only selects its device; the next press goes to the session.~%"))
 
 ;; Command-Escape is one local action: previous window, consumed, even from a remote.
 (when (uiop:os-macosx-p)

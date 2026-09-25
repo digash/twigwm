@@ -7,8 +7,8 @@
 On macOS ⌘-Escape returns to the previous individual Mac window; from a
 remote-session app it returns to the last local one, never another remote window.
 From native Mac apps, ⌘-1 through ⌘-9 open the saved desktop device and send
-Super-number; ⌘-0 does the same with the secondary device. Inside remote-session
-apps those keys pass through unchanged.
+Super-number; ⌘-0 only selects the secondary device. Inside remote-session
+apps those keys pass through unchanged, so a second ⌘-0 reaches the session.
 The platform slots are deliberately NIL."
     :ahk '("#Escape" . "return"))
 
