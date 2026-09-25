@@ -517,6 +517,38 @@ Windows of SKIP-BUNDLES, such as remote sessions, are never recorded: :SKIPPED."
                          (cf-equal focused window))))
                 1 "previous window focus"))))
 
+(defun cf-int (dictionary key)
+  (with-cf (name (cf-string key))
+    (let ((number (cffi:foreign-funcall "CFDictionaryGetValue"
+                                        :pointer dictionary :pointer name :pointer)))
+      (unless (cffi:null-pointer-p number)
+        (cffi:with-foreign-object (value :int64)
+          (cffi:foreign-funcall "CFNumberGetValue" :pointer number :int 4
+                                :pointer value :unsigned-char)
+          (cffi:mem-ref value :int64))))))
+
+(defun front-local-pid (skip-bundles)
+  "PID of the app owning the front-most ordinary on-screen window, skipping
+SKIP-BUNDLES, from the window server's front-to-back order."
+  (let ((apps (remove-if (lambda (app) (member (cdr app) skip-bundles :test #'equal))
+                         (running-apps))))
+    (with-cf (windows (cffi:foreign-funcall "CGWindowListCopyWindowInfo"
+                                            :uint32 17 :uint32 0 :pointer)) ; on screen, no desktop
+      (loop for window in (cf-items windows)
+            for pid = (cf-int window "kCGWindowOwnerPID")
+            when (and (eql 0 (cf-int window "kCGWindowLayer")) (assoc pid apps))
+              return pid))))
+
+(defun raise-front-local (skip-bundles)
+  "With no usable history -- e.g. only a remote session was used since start --
+raise the front-most local window instead."
+  (let* ((pid (front-local-pid skip-bundles))
+         (window (and pid (movable-window pid nil))))
+    (when window
+      (unwind-protect
+           (progn (raise-window window pid) (note-window window pid) t)
+        (cffi:foreign-funcall "CFRelease" :pointer window :void)))))
+
 (defun previous-window (&optional skip-bundles)
   "Raise the last recorded window other than the focused one. SKIP-BUNDLES
 are never recorded, so from a remote session this is the last local window."
@@ -536,7 +568,9 @@ are never recorded, so from a remote session this is the last local window."
                  (error ()
                    ;; Closed windows and exited apps cannot be selected again.
                    (setf *window-history* (remove entry *window-history* :test #'eq))
-                   (cffi:foreign-funcall "CFRelease" :pointer (car entry) :void))))))))
+                   (cffi:foreign-funcall "CFRelease" :pointer (car entry) :void)))
+            finally (when (eq recorded :skipped)
+                      (return (raise-front-local skip-bundles))))))))
 
 ;;; Desktop memory: exact frames keyed by bundle and title, floating windows
 ;;; included. The service loads it from *DESKTOP-FILE* at start (and again when
