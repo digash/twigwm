@@ -26,7 +26,7 @@
 
 (format t "PASS: FIFO type-ahead, explicit/stale readiness, repeated prefix, bounded queue, and reset.~%")
 (loop for code across #(29 18 19 20 21 23 22 26 28 25)
-      do (assert (eql (/= code 29) (not (null (number-p code +command+)))))
+      do (assert (number-p code +command+))
          (dolist (flags '(0 #x120000 #x140000 #x180000))
            (assert (not (number-p code flags)))))
 (assert (not (number-key 53)))
@@ -52,7 +52,7 @@
                  (assert (equal bundle "com.microsoft.rdc.macos"))
                  (assert (= pid 123))
                  (push :place calls)))
-         (let ((lease (make-lease)))
+         (let ((lease (make-lease :device "desktop")))
            (lease-worker lease)
            (assert (not (lease-error lease)))
            (assert (and (lease-ready lease) (lease-finished lease)))
@@ -141,23 +141,6 @@
           (symbol-function 'post-key-chord) post-chord)))
 (format t "PASS: Tab adapter routing, prefix/handoff cancellation, and shutdown releases.~%")
 
-;; Command-0 is consumed without replaying a zero or starting a desktop transfer.
-(when (uiop:os-macosx-p)
-  (let ((*live* t) (*handoff* (make-handoff)) (*lease* (make-lease))
-        (*escape-down* nil) (*host-prefix-p* nil)
-        (*callback-error* nil) (*probe-seen* nil)
-        (*app-down* (make-hash-table)) (*app-actions* nil))
-    (assert (not (probe-event 29 10 #x120000))) ; Shift-Command-0 stays native.
-    (arm *handoff*) ; zero also cancels an in-flight desktop handoff.
-    (assert (probe-event 29 10 +command+))
-    (assert (probe-event 29 10 +command+)) ; held repeat does not reopen secondary.
-    (assert (probe-event 29 11 +command+))
-    (assert (equal *app-actions* '((:saved-device "secondary"))))
-    (assert (lease-cancelled-p *lease*))
-    (assert (not (handoff-pending *handoff*)))
-    (assert (zerop (hash-table-count *app-down*)))
-    (assert (not *callback-error*)))
-  (format t "PASS: Command-0 opens secondary directly once, consumes repeats/releases, and cancels pending desktop routing.~%"))
 
 ;; Native callback routing, with no worker, guest command, or app delivery.
 (when (uiop:os-macosx-p)
@@ -165,7 +148,7 @@
         (frontmost (symbol-function 'twigwm-macos-apps:frontmost))
         (post (symbol-function 'post-to-app)))
     (unwind-protect
-         (loop for code across #(18 19 20 21 23 22 26 28 25) do
+         (loop for code across #(29 18 19 20 21 23 22 26 28 25) do
            (let ((*live* t) (*handoff* (make-handoff)) (*lease* nil)
                  (*escape-down* nil) (*host-prefix-p* nil)
                  (*callback-error* nil) (*probe-seen* nil)
@@ -174,8 +157,8 @@
                  (*app-down* (make-hash-table)) (*app-actions* nil)
                  (targets nil) (posted nil))
              (setf (symbol-function 'start-transfer)
-                   (lambda ()
-                     (push :desktop targets)
+                   (lambda (&optional (device *number-device*))
+                     (push device targets)
                      (setf *lease* (make-lease)))
                    (symbol-function 'twigwm-macos-apps:frontmost)
                    (lambda () (values 123 bundle))
@@ -204,7 +187,7 @@
                        (probe-event code type +command+)
                      (assert (not consumed))
                      (assert (equal description (list code type +command+)))))
-                 ;; After the local prefix, force the same desktop assignment.
+                 ;; After the local prefix, force the prefix-number assignment.
                  (prefix)
                  (assert (not (probe-event 55 12 0)))
                  (assert (not (probe-event 55 12 +command+)))
@@ -219,7 +202,7 @@
                                   (,code 11 ,+command+) (55 12 0))))
                  (assert (null *app-actions*))
                  (setf posted nil))
-               (assert (equal targets '(:desktop :desktop)))
+               (assert (equal targets '("secondary" "secondary")))
                ;; Native Mac numbers keep using the existing desktop rule.
                (setf bundle "com.apple.finder" targets nil)
                (assert (probe-event code 10 +command+))
@@ -233,7 +216,7 @@
                  (assert (not (eq old *lease*))))
                (assert (probe-event 18 11 +command+))
                (assert (probe-event 55 12 0))
-               (assert (equal targets '(:desktop :desktop)))
+               (assert (equal targets '("secondary" "desktop")))
                (finish-transfer)
                (assert (equal (reverse posted)
                               `((55 12 ,+command+) (18 10 ,+command+)
@@ -243,7 +226,7 @@
       (setf (symbol-function 'start-transfer) start
             (symbol-function 'twigwm-macos-apps:frontmost) frontmost
             (symbol-function 'post-to-app) post)))
-  (format t "PASS: local Escape consumes its chord, forces all desktop numbers, preserves ordinary remote keys, and replaces queued input.~%"))
+  (format t "PASS: local Escape consumes its chord, routes prefixed numbers to secondary, preserves ordinary remote keys, and replaces queued input.~%"))
 
 ;; The local reader consumes unknown keys and supports cancellation and native actions.
 (when (uiop:os-macosx-p)
@@ -295,12 +278,6 @@
              (prefix)
              (cancel) ; the click path calls the same cancellation
              (assert (not *host-prefix-p*))
-             ;; Prefix zero still opens secondary once, with no guest handoff.
-             (prefix)
-             (dolist (type '(10 10 11)) (assert (probe-event 29 type +command+)))
-             (assert (equal *app-actions* '((:saved-device "secondary"))))
-             (assert (not (handoff-pending *handoff*)))
-             (setf *app-actions* nil)
              ;; Local art/screenshot bypass the focused remote's passthrough/chord.
              (prefix)
              (dolist (type '(10 10 11)) (assert (probe-event 37 type +command+)))
@@ -315,5 +292,5 @@
       (cancel)
       (setf (symbol-function 'twigwm-macos-apps:frontmost) frontmost
             (symbol-function 'post-key-chord) post-chord)))
-  (format t "PASS: previous-window prefix, prefix forwarding, unknown keys, Control-G/Tab/click cancellation, secondary zero, and local art/screenshots.~%"))
+  (format t "PASS: previous-window prefix, prefix forwarding, unknown keys, Control-G/Tab/click cancellation, and local art/screenshots.~%"))
 (format t "MACOS_INPUT_COMPLETE~%")

@@ -3,7 +3,7 @@
 ;; The public project has no private registry, display IDs, or remote target.
 (assert (null twigwm-apps:*apps*))
 (assert (null *number-device*))
-(assert (null *zero-device*))
+(assert (null *prefix-number-device*))
 (assert (equal twigwm-macos-apps:*displays* '((:main :primary 0))))
 (assert (equal '(10 20 1200 800)
                (twigwm-macos-apps::region-rect :main

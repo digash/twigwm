@@ -86,8 +86,9 @@ exceeds the region, placement reports an error instead of recording success.
 * Optional remote routing
 
 Set =twigwm-macos-input:*number-device*= to a Windows App saved-device name to
-route Command-1 through Command-9 to that device, then forward the same shortcut.
-Set =*zero-device*= to make Command-0 select another saved device locally.
+route Command-0 through Command-9 to that device, then forward the same shortcut.
+Set =*prefix-number-device*= to send those keys after the local prefix to a
+different saved device.
 Both default to NIL. These names, application assignments, commands, and display
 UUIDs belong in your local configuration, not in the project sources.
 
