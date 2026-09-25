@@ -10,7 +10,7 @@
 (in-package :twigwm-keys)
 (load (merge-pathnames "../examples/keys.lisp" *load-truename*))
 (in-package :twigwm-macos-input)
-(setf *number-device* "desktop" *zero-device* "secondary")
+(setf *number-device* "desktop" *prefix-number-device* "secondary")
 (in-package :twigwm-macos-apps)
 (setf *guest-command* '("ssh" "desktop" "window-command")
       *displays* '((:portrait "00000000-0000-0000-0000-000000000001" 31)

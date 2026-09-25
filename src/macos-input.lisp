@@ -4,7 +4,8 @@
 (load (merge-pathnames "keys.lisp" *load-truename*))
 (defpackage :twigwm-macos-input
   (:use :cl)
-  (:export #:probe #:run #:*number-device* #:*zero-device* #:*swap-tab-modifiers*))
+  (:export #:probe #:run #:*number-device* #:*prefix-number-device*
+           #:*swap-tab-modifiers*))
 (in-package :twigwm-macos-input)
 (load (merge-pathnames "macos-tab.lisp" *load-truename*))
 
@@ -52,7 +53,7 @@
 (defvar *host-prefix-p* nil)
 (defvar *lease* nil)
 (defvar *number-device* nil)
-(defvar *zero-device* nil)
+(defvar *prefix-number-device* nil)
 (defvar *remote-bundles* nil)
 (defvar *app-down* (make-hash-table))
 (defvar *app-actions* nil)
@@ -80,7 +81,7 @@
   (position code #(29 18 19 20 21 23 22 26 28 25)))
 
 (defun number-p (code modifiers)
-  (and (number-key code) (/= code 29) (= modifiers +command+)))
+  (and (number-key code) (= modifiers +command+)))
 
 (defun native-key-spec (code)
   "Find the native binding for a macOS virtual keycode."
@@ -136,7 +137,7 @@
 
 (defstruct lease
   (lock (sb-thread:make-mutex :name "app handoff"))
-  ready finished cancelled pid bundle error thread)
+  device ready finished cancelled pid bundle error thread)
 
 (defun lease-cancelled-p (lease)
   (sb-thread:with-mutex ((lease-lock lease)) (lease-cancelled lease)))
@@ -146,7 +147,7 @@
        (handler-case
            (unless (lease-cancelled-p lease)
              (multiple-value-bind (pid bundle)
-                 (twigwm-macos-apps:open-saved-device *number-device*)
+                 (twigwm-macos-apps:open-saved-device (lease-device lease))
                (unless (lease-cancelled-p lease)
                  (place-app (find bundle (twigwm-apps:apps-for-mac)
                                   :key #'twigwm-apps:app-mac :test #'equal :from-end t)
@@ -160,9 +161,9 @@
     (sb-thread:with-mutex ((lease-lock lease))
       (setf (lease-finished lease) t))))
 
-(defun start-transfer ()
+(defun start-transfer (&optional (device *number-device*))
   (when (or (null *lease*) (lease-cancelled-p *lease*))
-    (let ((previous *lease*) (lease (make-lease)))
+    (let ((previous *lease*) (lease (make-lease :device device)))
       (setf *lease* lease
             (lease-thread lease)
             (sb-thread:make-thread
@@ -215,16 +216,16 @@
   (append (when (or (logtest flags #x8) (not (logtest flags #x10))) '(55))
           (when (logtest flags #x10) '(54))))
 
-(defun start-number-transfer (event)
+(defun start-number-transfer (event &optional (device *number-device*))
   (arm *handoff*)
   (dolist (code (command-keycodes (event-flags event)))
     (buffer-event event code 12))
   (buffer-event event)
-  (start-transfer))
+  (start-transfer device))
 
-(defun dispatch-number (event)
-  (if *number-device*
-      (start-number-transfer event)
+(defun dispatch-number (event &optional (device *number-device*))
+  (if device
+      (start-number-transfer event device)
       (let* ((code (event-field event 9))
              (app (twigwm-apps:app-for-number (twigwm-apps:apps-for-mac) (number-key code)))
              (bundle (and app (twigwm-apps:mac-bundle app))))
@@ -316,7 +317,8 @@
   "Consume one local shortcut after Super-Escape, including unbound keys."
   (setf *host-prefix-p* nil)
   (cond
-    ((number-p code modifiers) (dispatch-number event))
+    ((number-p code modifiers)
+     (dispatch-number event (or *prefix-number-device* *number-device*)))
     (t
      (cond
        ((and (= code 53) (= modifiers *prefix-modifiers*))
@@ -326,8 +328,6 @@
         (post-key-chord (twigwm-macos-apps:frontmost)
                         '((55 12 #x100008) (53 10 #x100008)
                           (53 11 #x100008) (55 12 0))))
-       ((and *zero-device* (= code 29) (= modifiers +command+))
-        (queue-app-action :saved-device *zero-device*))
        ((or (native-key-spec code) (movement-direction code modifiers))
         (multiple-value-bind (pid bundle) (twigwm-macos-apps:frontmost)
           (dispatch-native-key event pid bundle t))))
@@ -425,12 +425,6 @@
               ;; The isolated event-tap probe still needs a capture trigger.
               (setf *escape-down* t)
               (arm *handoff*)
-              (cffi:null-pointer))
-             ((and *live* *zero-device* (= type 10) (= code 29) (= modifiers +command+))
-              ;; Command-0 opens secondary directly, including from a remote session.
-              (cancel)
-              (setf (gethash code *app-down*) t)
-              (queue-app-action :saved-device *zero-device*)
               (cffi:null-pointer))
              ((handoff-pending *handoff*)
               (cond

@@ -13,4 +13,4 @@
       *regions* '((:left :main 0 0 1/3 1) (:right :main 1/3 0 1 1)))
 ;; Optional remote routing: saved-device names are local user configuration.
 ;; (setf twigwm-macos-input::*number-device* "desktop"
-;;       twigwm-macos-input::*zero-device* "secondary")
+;;       twigwm-macos-input::*prefix-number-device* "secondary")
