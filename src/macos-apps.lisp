@@ -379,20 +379,24 @@ No wraparound or diagonal jumps; monitor gaps and negative origins are allowed."
   (with-pool
     (let* ((screens (cf-items (send (class "NSScreen") "screens")))
            (height (fourth (screen-rect (first screens) "frame" 0))))
-      (loop for screen in screens collect
+      (loop for screen in screens nconc
         (with-cf (key (cf-string "NSScreenNumber"))
           (let* ((number (cffi:foreign-funcall "CFDictionaryGetValue"
                                              :pointer (send screen "deviceDescription")
                                              :pointer key :pointer))
                  (id (cffi:foreign-funcall "objc_msgSend" :pointer number
-                                         :pointer (selector "unsignedIntValue") :uint32)))
-            (with-cf (uuid (cffi:foreign-funcall "CGDisplayCreateUUIDFromDisplayID"
-                                                 :uint32 id :pointer))
-              (with-cf (name (cffi:foreign-funcall "CFUUIDCreateString"
-                                                   :pointer (cffi:null-pointer) :pointer uuid :pointer))
-                (list (cf-text name)
-                      (screen-rect screen "frame" height)
-                      (screen-rect screen "visibleFrame" height))))))))))
+                                         :pointer (selector "unsignedIntValue") :uint32))
+                 (uuid (cffi:foreign-funcall "CGDisplayCreateUUIDFromDisplayID"
+                                             :uint32 id :pointer)))
+            ;; A display being reconfigured can have no UUID yet; skip it
+            ;; rather than fail every placement until TwigWM restarts.
+            (unless (cffi:null-pointer-p uuid)
+              (with-cf (uuid uuid)
+                (with-cf (name (cffi:foreign-funcall "CFUUIDCreateString"
+                                                     :pointer (cffi:null-pointer) :pointer uuid :pointer))
+                  (list (list (cf-text name)
+                              (screen-rect screen "frame" height)
+                              (screen-rect screen "visibleFrame" height))))))))))))
 
 (defun ax-flag-p (window name)
   (with-cf (value (ax-get window name))
@@ -527,6 +531,19 @@ Windows of SKIP-BUNDLES, such as remote sessions, are never recorded: :SKIPPED."
                                 :pointer value :unsigned-char)
           (cffi:mem-ref value :int64))))))
 
+(defun running-apps ()
+  "(PID . BUNDLE) for each regular (Dock-visible) application."
+  (with-pool
+    (loop for app in (cf-items (send (send (class "NSWorkspace") "sharedWorkspace")
+                                     "runningApplications"))
+          for bundle = (send app "bundleIdentifier")
+          when (and (not (cffi:null-pointer-p bundle))
+                    (zerop (cffi:foreign-funcall "objc_msgSend" :pointer app
+                                               :pointer (selector "activationPolicy") :long)))
+            collect (cons (cffi:foreign-funcall "objc_msgSend" :pointer app
+                                              :pointer (selector "processIdentifier") :int)
+                          (cf-text bundle)))))
+
 (defun front-local-pid (skip-bundles)
   "PID of the app owning the front-most ordinary on-screen window, skipping
 SKIP-BUNDLES, from the window server's front-to-back order."
@@ -580,19 +597,6 @@ are never recorded, so from a remote session this is the last local window."
   (merge-pathnames "twigwm/desktop.sexp"
                    (or (ignore-errors (uiop:getenv-absolute-directory "XDG_STATE_HOME"))
                        (merge-pathnames ".local/state/" (user-homedir-pathname)))))
-
-(defun running-apps ()
-  "(PID . BUNDLE) for each regular (Dock-visible) application."
-  (with-pool
-    (loop for app in (cf-items (send (send (class "NSWorkspace") "sharedWorkspace")
-                                     "runningApplications"))
-          for bundle = (send app "bundleIdentifier")
-          when (and (not (cffi:null-pointer-p bundle))
-                    (zerop (cffi:foreign-funcall "objc_msgSend" :pointer app
-                                               :pointer (selector "activationPolicy") :long)))
-            collect (cons (cffi:foreign-funcall "objc_msgSend" :pointer app
-                                              :pointer (selector "processIdentifier") :int)
-                          (cf-text bundle)))))
 
 (defun app-windows (pid function)
   "Call FUNCTION with each of PID's borrowed AX windows; skip unresponsive apps."
