@@ -5,7 +5,7 @@
   (:export #:focus #:rdp-pid #:submit #:nonce #:await
            #:frontmost #:open-bundle #:focus-windows #:open-saved-device #:place-bundle
            #:movable-window #:move-window #:load-memory #:place-new-windows #:reset-seen
-           #:record-front-window #:previous-window #:reset-window-history
+           #:record-front-window #:previous-window #:finish-cycle #:reset-window-history
            #:screens #:*displays* #:*regions* #:*guest-command*
            #:save-desktop #:load-desktop #:*desktop-file*))
 (in-package :twigwm-macos-apps)
@@ -473,13 +473,14 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
 ;;; MRU window identities, including separate windows owned by the same app.
 ;;; Only the background focus watcher and app-action worker use this lock.
 (defvar *window-history* nil)
+(defvar *cycle* nil "History index of the window raised while the modifier is held.")
 (defvar *window-history-lock* (sb-thread:make-mutex :name "Mac window history"))
 
 (defun reset-window-history ()
   (sb-thread:with-mutex (*window-history-lock*)
     (dolist (entry *window-history*)
       (cffi:foreign-funcall "CFRelease" :pointer (car entry) :void))
-    (setf *window-history* nil)))
+    (setf *window-history* nil *cycle* nil)))
 
 (defun note-window (window pid)
   "Caller holds the history lock; retain each window identity only once."
@@ -489,10 +490,11 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
     (setf *window-history* (cons entry (remove entry *window-history* :test #'eq)))))
 
 (defun record-front-window ()
-  "Record only a responsive, focused standard window. Never move it."
+  "Record only a responsive, focused standard window. Never move it.
+Mid-cycle the order is frozen until FINISH-CYCLE."
   (sb-thread:with-mutex (*window-history-lock*)
     (let* ((pid (frontmost))
-           (window (movable-window pid nil)))
+           (window (and (not *cycle*) (movable-window pid nil))))
       (when window
         (with-cf (selected window)
           (when (equal (ax-text selected "AXSubrole") "AXStandardWindow")
@@ -564,31 +566,45 @@ raise the front-most local window instead."
         (cffi:foreign-funcall "CFRelease" :pointer window :void)))))
 
 (defun previous-window (&optional remote-bundles)
-  "Raise the last recorded window other than the focused one, like StumpWM's
-s-Tab: windows, remote sessions' included, not applications. From a window of
-REMOTE-BUNDLES with no other window known, fall back to a local one."
+  "Raise the next older recorded window, like StumpWM's s-Tab: each press while
+the modifier is held goes one window deeper, and FINISH-CYCLE on its release
+makes the choice most recent. Windows, remote sessions' included, not
+applications. From a window of REMOTE-BUNDLES with no other window known, fall
+back to a local one."
   ;; Refresh now so a rapid switch followed by the prefix uses the current window.
-  (let ((recorded (record-front-window))
-        (remote (member (nth-value 1 (frontmost)) remote-bundles :test #'equal)))
+  (let* ((cycling *cycle*)
+         (recorded (and (not cycling) (record-front-window)))
+         (remote (member (nth-value 1 (frontmost)) remote-bundles :test #'equal)))
     ;; A local dialog never picks an arbitrary window.
-    (when (or recorded remote)
+    (when (or cycling recorded remote)
     (sb-thread:with-mutex (*window-history-lock*)
-      (loop for entry = (if recorded (second *window-history*) (first *window-history*))
-            while entry
-            do (handler-case
-                   (progn
-                     (raise-window (car entry) (cdr entry))
-                     (note-window (car entry) (cdr entry))
-                     (return t))
-                 (error ()
-                   ;; Closed windows and exited apps cannot be selected again.
-                   (setf *window-history* (remove entry *window-history* :test #'eq))
-                   (cffi:foreign-funcall "CFRelease" :pointer (car entry) :void)))
-            finally (when remote
+      (loop
+        (let* ((count (length *window-history*))
+               (index (cond (cycling (mod (1+ *cycle*) (max count 1))) (recorded 1) (t 0)))
+               (entry (and (< index count) (nth index *window-history*))))
+          (unless entry
+            (return (when (and remote (not cycling))
                       ;; No local window at all: Finder opens one, which also
                       ;; leaves a remote session's fullscreen Space.
-                      (return (or (raise-front-local remote-bundles)
-                                  (progn (open-bundle "com.apple.finder") t)))))))))
+                      (or (raise-front-local remote-bundles)
+                          (progn (open-bundle "com.apple.finder") t)))))
+          (handler-case
+              (progn
+                (raise-window (car entry) (cdr entry))
+                (setf *cycle* index)
+                (return t))
+            (error ()
+              ;; Closed windows and exited apps cannot be selected again.
+              (setf *window-history* (remove entry *window-history* :test #'eq))
+              (cffi:foreign-funcall "CFRelease" :pointer (car entry) :void)))))))))
+
+(defun finish-cycle ()
+  "The modifier was released: the raised window becomes the most recent."
+  (sb-thread:with-mutex (*window-history-lock*)
+    (let ((entry (and *cycle* (nth *cycle* *window-history*))))
+      (setf *cycle* nil)
+      (when entry
+        (setf *window-history* (cons entry (remove entry *window-history* :test #'eq)))))))
 
 ;;; Desktop memory: exact frames keyed by bundle and title, floating windows
 ;;; included. The service loads it from *DESKTOP-FILE* at start (and again when

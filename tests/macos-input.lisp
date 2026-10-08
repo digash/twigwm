@@ -223,18 +223,30 @@
 (when (uiop:os-macosx-p)
   (let ((frontmost (symbol-function 'twigwm-macos-apps:frontmost))
         (*live* t) (*handoff* (make-handoff)) (*lease* (make-lease))
-        (*escape-down* nil) (*callback-error* nil) (*probe-seen* nil)
+        (*escape-down* nil) (*escape-cycle* nil) (*callback-error* nil) (*probe-seen* nil)
         (*remote-bundles* '("com.microsoft.rdc.macos"))
         (*app-down* (make-hash-table)) (*app-actions* nil))
     (unwind-protect
          (progn
            (setf (symbol-function 'twigwm-macos-apps:frontmost)
                  (lambda () (values 123 "com.microsoft.rdc.macos")))
+           ;; Held Command: each Escape goes one deeper; Command release ends the cycle.
+           (assert (probe-event 53 10 +command+))
+           (assert (probe-event 53 11 +command+))
+           (assert (probe-event 53 10 +command+))
+           (assert (probe-event 53 11 +command+))
+           (assert (not (probe-event 55 12 0))) ; the release itself passes through
+           (assert (equal *app-actions* '((:previous-window) (:previous-window) (:finish-cycle))))
+           (assert (not *escape-cycle*))
+           (assert (not (probe-event 55 12 0))) ; a later release queues nothing
+           (assert (= 3 (length *app-actions*)))
+           (setf *app-actions* nil)
            (arm *handoff*)
            (assert (probe-event 53 10 +command+))
            (assert (probe-event 53 10 +command+)) ; held repeat does not switch again
            (assert (probe-event 53 11 +command+))
            (assert (equal *app-actions* '((:previous-window))))
+           (setf *escape-cycle* nil)
            (assert (lease-cancelled-p *lease*)) ; and cancels a pending handoff
            (assert (not (handoff-pending *handoff*)))
            (setf *app-actions* nil)

@@ -50,6 +50,7 @@
 (defvar *live* nil)
 (defvar *prefix-modifiers* +command+)
 (defvar *escape-down* nil)
+(defvar *escape-cycle* nil "Command-Escape was pressed and Command is still held.")
 (defvar *lease* nil)
 (defvar *number-device* nil)
 (defvar *zero-device* nil)
@@ -129,6 +130,7 @@
                           (:launch (apply #'launch-native-command (rest action)))
                           (:saved-device (apply #'twigwm-macos-apps:open-saved-device (rest action)))
                           (:previous-window (twigwm-macos-apps:previous-window remote))
+                          (:finish-cycle (twigwm-macos-apps:finish-cycle))
                           (:move (apply #'twigwm-macos-apps:move-window (rest action))))
                       (error (e) (format *error-output* "App shortcut failed: ~a~%" e)))
                  (release-app-action action)))
@@ -381,6 +383,12 @@
                    (or *tab-switch* (= code 48))
                    (dispatch-tab-switch code type (event-flags event)))
               (cffi:null-pointer))
+             ((and *escape-cycle* (= type 12) (not (logtest modifiers *prefix-modifiers*)))
+              ;; Releasing the modifier ends a Command-Escape cycle, as Super
+              ;; release does for StumpWM's s-Tab; the release itself passes on.
+              (setf *escape-cycle* nil)
+              (queue-app-action :finish-cycle)
+              event)
              (held
               (when (= type 11) (remhash code *app-down*))
               (cffi:null-pointer))
@@ -395,7 +403,7 @@
               ;; One press returns to the last local window, even from a remote
               ;; session; the clause above consumes its repeats and release.
               (cancel)
-              (setf *escape-down* t)
+              (setf *escape-down* t *escape-cycle* t)
               (queue-app-action :previous-window)
               (cffi:null-pointer))
              ((and (not *live*) (= type 10) (= code 53) (= modifiers *prefix-modifiers*))
@@ -568,10 +576,10 @@
 (defun run (&key seconds (modifiers +command+))
   "Resident app shortcuts; SECONDS bounds a trial, NIL runs until stopped."
   (let* ((*live* t) (*lease* nil) (*prefix-modifiers* modifiers) (*escape-down* nil)
+         (*escape-cycle* nil)
          (*tab-switch* nil)
          (apps (twigwm-apps:apps-for-mac))
          (*remote-bundles* (twigwm-apps:mac-passthrough-bundles apps))
-         (remote *remote-bundles*)
          (history-stop (sb-thread:make-semaphore)) (history-thread nil)
          (*app-down* (make-hash-table)) (*app-actions* nil) (*app-thread* nil))
     (twigwm-macos-apps:load-memory)
