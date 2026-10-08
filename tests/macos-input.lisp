@@ -123,6 +123,14 @@
          (assert (null (caar posted))) ; local switcher uses global delivery
          (release-tab-switch)
          (assert (equal (first posted) '(nil ((48 11 0) (55 12 0)))))
+         ;; Connection Center is not a session: Command-Tab stays native.
+         (let ((session (symbol-function 'twigwm-macos-apps:remote-session-front-p)))
+           (setf (symbol-function 'twigwm-macos-apps:remote-session-front-p)
+                 (lambda (remote) (declare (ignore remote)) nil))
+           (unwind-protect
+                (progn (assert (not (dispatch-tab-switch 48 10 #x100008)))
+                       (assert (not *tab-switch*)))
+             (setf (symbol-function 'twigwm-macos-apps:remote-session-front-p) session)))
          ;; On macOS, also exercise callback priority and the replay guard.
          (when (uiop:os-macosx-p)
            (let ((*live* t) (*swap-tab-modifiers* t) (*callback-error* nil))
@@ -138,7 +146,7 @@
              (assert (not *callback-error*)))))
     (setf (symbol-function 'twigwm-macos-apps:frontmost) frontmost
           (symbol-function 'post-key-chord) post-chord)))
-(format t "PASS: Tab adapter routing, handoff cancellation, and shutdown releases.~%")
+(format t "PASS: Tab adapter routing, Connection Center stays native, handoff cancellation, and shutdown releases.~%")
 
 
 ;; Native callback routing, with no worker, guest command, or app delivery.

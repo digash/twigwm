@@ -269,11 +269,14 @@
       (release-events events))))
 
 (defun dispatch-tab-switch (code type flags)
-  (multiple-value-bind (pid bundle)
-      (if *tab-switch* (values nil nil) (twigwm-macos-apps:frontmost))
+  ;; Connection Center is not a session: Command-Tab there stays native.
+  (multiple-value-bind (pid remote-p)
+      (if *tab-switch*
+          (values nil nil)
+          (values (twigwm-macos-apps:frontmost)
+                  (twigwm-macos-apps:remote-session-front-p *remote-bundles*)))
     (multiple-value-bind (consumed target events)
-        (tab-switch-step code type flags
-                         (member bundle *remote-bundles* :test #'equal) pid)
+        (tab-switch-step code type flags remote-p pid)
       (when consumed
         (cancel)
         (post-key-chord target events)
