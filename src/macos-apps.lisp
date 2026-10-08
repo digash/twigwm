@@ -473,6 +473,7 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
 ;;; MRU window identities, including separate windows owned by the same app.
 ;;; Only the background focus watcher and app-action worker use this lock.
 (defvar *window-history* nil)
+(defvar *escaped-remote* nil "Bundle of the remote session Command-Escape left.")
 (defvar *window-history-lock* (sb-thread:make-mutex :name "Mac window history"))
 
 (defun reset-window-history ()
@@ -571,6 +572,13 @@ raise the front-most local window instead."
 are never recorded, so from a remote session this is the last local window."
   ;; Refresh now so a rapid switch followed by the prefix uses the current window.
   (let ((recorded (record-front-window skip-bundles)))
+    ;; Leaving a remote session remembers it; the next press from a local
+    ;; window returns there, back into its fullscreen Space.
+    (cond ((eq recorded :skipped)
+           (setf *escaped-remote* (nth-value 1 (frontmost))))
+          (*escaped-remote*
+           (open-bundle (shiftf *escaped-remote* nil))
+           (return-from previous-window t)))
     (when recorded
     (sb-thread:with-mutex (*window-history-lock*)
       (loop for entry = (if (eq recorded :skipped)
