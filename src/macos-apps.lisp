@@ -473,7 +473,6 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
 ;;; MRU window identities, including separate windows owned by the same app.
 ;;; Only the background focus watcher and app-action worker use this lock.
 (defvar *window-history* nil)
-(defvar *escaped-remote* nil "Bundle of the remote session Command-Escape left.")
 (defvar *window-history-lock* (sb-thread:make-mutex :name "Mac window history"))
 
 (defun reset-window-history ()
@@ -489,19 +488,16 @@ The tap never polls AX: a short IPC timeout fails open on unresponsive apps."
       (setf entry (cons (cffi:foreign-funcall "CFRetain" :pointer window :pointer) pid)))
     (setf *window-history* (cons entry (remove entry *window-history* :test #'eq)))))
 
-(defun record-front-window (&optional skip-bundles)
-  "Record only a responsive, focused standard window. Never move it.
-Windows of SKIP-BUNDLES, such as remote sessions, are never recorded: :SKIPPED."
+(defun record-front-window ()
+  "Record only a responsive, focused standard window. Never move it."
   (sb-thread:with-mutex (*window-history-lock*)
-    (multiple-value-bind (pid bundle) (frontmost)
-      (if (member bundle skip-bundles :test #'equal)
-          :skipped
-          (let ((window (movable-window pid nil)))
-            (when window
-              (with-cf (selected window)
-                (when (equal (ax-text selected "AXSubrole") "AXStandardWindow")
-                  (note-window selected pid)
-                  t))))))))
+    (let* ((pid (frontmost))
+           (window (movable-window pid nil)))
+      (when window
+        (with-cf (selected window)
+          (when (equal (ax-text selected "AXSubrole") "AXStandardWindow")
+            (note-window selected pid)
+            t))))))
 
 (defun raise-window (window pid)
   "Raise the exact existing window without resizing or launching an application."
@@ -567,23 +563,17 @@ raise the front-most local window instead."
            (progn (raise-window window pid) (note-window window pid) t)
         (cffi:foreign-funcall "CFRelease" :pointer window :void)))))
 
-(defun previous-window (&optional skip-bundles)
-  "Raise the last recorded window other than the focused one. SKIP-BUNDLES
-are never recorded, so from a remote session this is the last local window."
+(defun previous-window (&optional remote-bundles)
+  "Raise the last recorded window other than the focused one, like StumpWM's
+s-Tab: windows, remote sessions' included, not applications. From a window of
+REMOTE-BUNDLES with no other window known, fall back to a local one."
   ;; Refresh now so a rapid switch followed by the prefix uses the current window.
-  (let ((recorded (record-front-window skip-bundles)))
-    ;; Leaving a remote session remembers it; the next press from a local
-    ;; window returns there, back into its fullscreen Space.
-    (cond ((eq recorded :skipped)
-           (setf *escaped-remote* (nth-value 1 (frontmost))))
-          (*escaped-remote*
-           (open-bundle (shiftf *escaped-remote* nil))
-           (return-from previous-window t)))
-    (when recorded
+  (let ((recorded (record-front-window))
+        (remote (member (nth-value 1 (frontmost)) remote-bundles :test #'equal)))
+    ;; A local dialog never picks an arbitrary window.
+    (when (or recorded remote)
     (sb-thread:with-mutex (*window-history-lock*)
-      (loop for entry = (if (eq recorded :skipped)
-                            (first *window-history*)
-                            (second *window-history*))
+      (loop for entry = (if recorded (second *window-history*) (first *window-history*))
             while entry
             do (handler-case
                    (progn
@@ -594,10 +584,10 @@ are never recorded, so from a remote session this is the last local window."
                    ;; Closed windows and exited apps cannot be selected again.
                    (setf *window-history* (remove entry *window-history* :test #'eq))
                    (cffi:foreign-funcall "CFRelease" :pointer (car entry) :void)))
-            finally (when (eq recorded :skipped)
+            finally (when remote
                       ;; No local window at all: Finder opens one, which also
                       ;; leaves a remote session's fullscreen Space.
-                      (return (or (raise-front-local skip-bundles)
+                      (return (or (raise-front-local remote-bundles)
                                   (progn (open-bundle "com.apple.finder") t)))))))))
 
 ;;; Desktop memory: exact frames keyed by bundle and title, floating windows
