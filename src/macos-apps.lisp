@@ -3,7 +3,7 @@
   (:use :cl)
   (:shadow #:class)
   (:export #:focus #:rdp-pid #:submit #:nonce #:await
-           #:frontmost #:open-bundle #:focus-windows #:open-saved-device #:place-bundle
+           #:frontmost #:remote-session-front-p #:open-bundle #:focus-windows #:open-saved-device #:place-bundle
            #:movable-window #:move-window #:load-memory #:place-new-windows #:reset-seen
            #:record-front-window #:previous-window #:finish-cycle #:reset-window-history
            #:screens #:*displays* #:*regions* #:*guest-command*
@@ -182,6 +182,18 @@
       (values (cffi:foreign-funcall "objc_msgSend" :pointer app
                                    :pointer (selector "processIdentifier") :int)
               (unless (cffi:null-pointer-p bundle) (cf-text bundle))))))
+
+(defun remote-session-front-p (remote-bundles)
+  "True when a remote client's session window, not e.g. its Connection Center
+(titled with the app's own name), is focused. Fails open to the session."
+  (multiple-value-bind (pid bundle) (frontmost)
+    (and (member bundle remote-bundles :test #'equal)
+         (handler-case
+             (with-cf (app (cffi:foreign-funcall "AXUIElementCreateApplication" :int pid :pointer))
+               (ax-timeout app 0.02)
+               (with-cf (window (ax-get app "AXFocusedWindow"))
+                 (not (equal (ax-title window) "Windows App"))))
+           (error () t)))))
 
 (defun open-bundle (bundle-name)
   "Ask LaunchServices to open/raise an installed native app or Chrome PWA."
