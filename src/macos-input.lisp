@@ -419,9 +419,9 @@
               (cffi:null-pointer))
              ((and *live* (= type 10) (number-p code modifiers))
               ;; Re-selecting desktop's Mac window interrupts a nested guest's
-              ;; keyboard grab. Let the focused remote session own its keys.
-              (if (member (nth-value 1 (twigwm-macos-apps:frontmost))
-                          *remote-bundles* :test #'equal)
+              ;; keyboard grab. Let the focused remote session own its keys;
+              ;; Connection Center is not a session and routes like a Mac app.
+              (if (twigwm-macos-apps:remote-session-front-p *remote-bundles*)
                   event
                   (cond ((and (= code 29) *zero-device*)
                          ;; Only select it: a second Command-0, now inside the

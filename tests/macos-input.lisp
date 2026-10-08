@@ -145,6 +145,7 @@
 (when (uiop:os-macosx-p)
   (let ((start (symbol-function 'start-transfer))
         (frontmost (symbol-function 'twigwm-macos-apps:frontmost))
+        (session (symbol-function 'twigwm-macos-apps:remote-session-front-p))
         (post (symbol-function 'post-to-app)))
     (unwind-protect
          (loop for code across #(18 19 20 21 23 22 26 28 25) do
@@ -186,12 +187,20 @@
              (assert (equal (reverse posted)
                             `((55 12 ,+command+) (,code 10 ,+command+)
                               (,code 11 ,+command+) (55 12 0))))
+             ;; Connection Center is the remote client but not a session: route.
+             (setf bundle "com.microsoft.rdc.macos"
+                   (symbol-function 'twigwm-macos-apps:remote-session-front-p)
+                   (lambda (remote) (declare (ignore remote)) nil))
+             (assert (probe-event code 10 +command+))
+             (assert (equal targets '("desktop" "desktop")))
+             (setf (symbol-function 'twigwm-macos-apps:remote-session-front-p) session)
              (assert (not *callback-error*))
              (cancel)))
       (setf (symbol-function 'start-transfer) start
             (symbol-function 'twigwm-macos-apps:frontmost) frontmost
+            (symbol-function 'twigwm-macos-apps:remote-session-front-p) session
             (symbol-function 'post-to-app) post)))
-  (format t "PASS: remote numbers pass through; native numbers route and forward.~%"))
+  (format t "PASS: remote numbers pass through; native and Connection Center numbers route and forward.~%"))
 
 ;; From a native app Command-0 only selects its device; inside the session it passes.
 (when (uiop:os-macosx-p)
