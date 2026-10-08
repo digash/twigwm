@@ -57,16 +57,18 @@
                    (assert (not (previous-window))) ; dialog does not pick an arbitrary window
                    (setf selected nil)
                    (assert (not (previous-window)))
-                   ;; A skipped remote session is never recorded; from it,
-                   ;; the most recent local window is raised.
+                   ;; A remote session's window is recorded like any other,
+                   ;; so toggling returns to that exact window.
                    (setf standard t selected one pid 100)
                    (record-front-window)
                    (setf (symbol-function 'frontmost)
                          (lambda () (values pid "com.microsoft.rdc.macos")))
-                   (assert (eq :skipped (record-front-window '("com.microsoft.rdc.macos"))))
                    (setf selected three pid 200)
+                   (assert (record-front-window))
                    (assert (previous-window '("com.microsoft.rdc.macos")))
                    (assert (cf-equal selected one))
+                   (assert (previous-window '("com.microsoft.rdc.macos")))
+                   (assert (cf-equal selected three))
                    (reset-window-history)
                    (assert (null *window-history*)))))))
       (reset-window-history)
@@ -74,5 +76,5 @@
             (symbol-function 'movable-window) movable
             (symbol-function 'ax-text) text
             (symbol-function 'raise-window) raise)))
-  (format t "PASS: individual-window MRU, same-app toggling, CF identity, closed-window removal, dialogs, skipped remote sessions, and reset.~%"))
+  (format t "PASS: individual-window MRU, same-app toggling, CF identity, closed-window removal, dialogs, remote windows, and reset.~%"))
 (format t "WINDOW_HISTORY_TESTS_COMPLETE~%")

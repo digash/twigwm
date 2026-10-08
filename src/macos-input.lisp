@@ -586,7 +586,7 @@
                 ;; Windows already open at start are recorded, never moved.
                 (ignore-errors (twigwm-macos-apps:place-new-windows nil))
                 (loop for tick from 1
-                      do (ignore-errors (twigwm-macos-apps:record-front-window remote))
+                      do (ignore-errors (twigwm-macos-apps:record-front-window))
                          (when (zerop (mod tick 5))
                            (ignore-errors (twigwm-macos-apps:place-new-windows)))
                       until (sb-thread:wait-on-semaphore history-stop :timeout 0.1)))
