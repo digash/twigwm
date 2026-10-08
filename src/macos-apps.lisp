@@ -587,7 +587,10 @@ are never recorded, so from a remote session this is the last local window."
                    (setf *window-history* (remove entry *window-history* :test #'eq))
                    (cffi:foreign-funcall "CFRelease" :pointer (car entry) :void)))
             finally (when (eq recorded :skipped)
-                      (return (raise-front-local skip-bundles))))))))
+                      ;; No local window at all: Finder opens one, which also
+                      ;; leaves a remote session's fullscreen Space.
+                      (return (or (raise-front-local skip-bundles)
+                                  (progn (open-bundle "com.apple.finder") t)))))))))
 
 ;;; Desktop memory: exact frames keyed by bundle and title, floating windows
 ;;; included. The service loads it from *DESKTOP-FILE* at start (and again when
