@@ -70,7 +70,9 @@ The example splits the primary display into left one third and right two thirds.
 =twigwm-macos-apps:screens= returns display UUIDs and geometry for configuring
 additional displays. A region is =(NAME DISPLAY LEFT TOP RIGHT BOTTOM)=, with
 fractional edges. A display is =(NAME UUID TOP-CLEARANCE)=; =:primary= may replace
-the UUID. Missing displays are skipped.
+the UUID. Missing displays are skipped. A horizontal edge may be
+=(:left-of DISPLAY FALLBACK)=: the x where DISPLAY starts, so the split follows
+scaling and Display Arrangement, or FALLBACK while DISPLAY is disconnected.
 
 A remembered frame takes precedence over the configured region when an app's
 shortcut places its window. Memory is written to disk only by =save-desktop=.
