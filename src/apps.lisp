@@ -5,7 +5,7 @@
   (:use :cl)
   (:export #:app #:make-app #:app-p
            #:app-name #:app-cmd #:app-instance #:app-class #:app-title
-           #:app-n #:app-frame #:app-group #:app-kind #:app-hosts
+           #:app-n #:app-kind #:app-hosts
            #:app-key #:app-fullscreen
            #:app-mac #:app-mac-cmd #:app-mac-passthrough #:app-mac-region
            #:*apps* #:*mac-host* #:host-match-p #:apps-for-host #:wslg-app-p #:wslg-title
@@ -32,7 +32,7 @@ MAC-REGION restores the selected Mac window on each shortcut press; NIL disables
 placement. Most apps share the portrait display's lower two thirds.
 KEY binds a literal key instead of s-N; FULLSCREEN fullscreens what it raises."
   name cmd instance class title
-  (n 0) (frame 0) group kind (hosts :all)      ; N NIL: no s-N; KEY or metadata only
+  (n 0) kind (hosts :all)      ; N NIL: no s-N; KEY or metadata only
   key fullscreen
   mac mac-cmd mac-passthrough (mac-region :main))
 
