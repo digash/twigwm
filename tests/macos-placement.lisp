@@ -27,7 +27,17 @@
     (assert (equal top '(1200 -560 1081 607)))
     (assert (= (+ (second top) (fourth top)) (second bottom)))
     (assert (= (+ (fourth top) (fourth bottom)) 1820))))
-(format t "PASS: five regions, shared rounded edges, negative origins, menu/Dock clearance, missing displays.~%")
+;; A screen-relative edge splits above the laptop's left edge, at any scaling.
+(let ((*regions* '((:left :landscape 0 0 (:left-of :laptop 1/2) 1)
+                   (:right :landscape (:left-of :laptop 1/2) 0 1 1))))
+  (assert (equal (region-rect :left *test-screens*) '(-2560 351 1064 1409)))
+  (assert (equal (region-rect :right *test-screens*) '(-1496 351 1496 1409)))
+  (let ((screens (copy-tree *test-screens*)))
+    (setf (second (second screens)) '(-3008 320 3008 1692) (third (second screens)) '(-3008 320 3008 1692)
+          (third screens) '("00000000-0000-0000-0000-000000000003" (-1728 2012 1728 1117) (-1728 2012 1728 1083)))
+    (assert (equal (region-rect :right screens) '(-1728 351 1728 1661))))
+  (assert (equal (region-rect :right (butlast *test-screens*)) '(-1280 351 1280 1409))))
+(format t "PASS: five regions, shared rounded edges, negative origins, menu/Dock clearance, missing displays, screen-relative edges.~%")
 
 (dolist (case '((:landscape-left :right :landscape-right)
                 (:landscape-right :left :landscape-left)

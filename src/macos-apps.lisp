@@ -312,6 +312,17 @@ SCREENS contains (UUID bounds visible-bounds), all in logical AX coordinates."
         (let ((screen (if (eq uuid :primary) (first screens) (assoc uuid screens :test #'string-equal))))
           (when screen
             (destructuring-bind (x y width height) (third screen)
+              ;; An edge (:left-of ROLE FALLBACK) lies where ROLE's display starts,
+              ;; so it follows scaling and Display Arrangement; FALLBACK if absent.
+              (flet ((edge (edge)
+                       (if (realp edge) edge
+                           (destructuring-bind (other fallback) (cdr edge)
+                             (let ((other (assoc (second (assoc other *displays*)) screens
+                                                 :test #'equalp)))
+                               (if other
+                                   (max 0 (min 1 (/ (- (first (third other)) x) width)))
+                                   fallback))))))
+                (setf left (edge left) right (edge right)))
               (let* ((inset (max 0 (- (+ (second (second screen)) clearance) y)))
                      (usable-height (- height inset))
                      (x0 (round (* width left)))
