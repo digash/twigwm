@@ -51,7 +51,9 @@ Fullscreen remote windows receive ordinary Command-arrows. Placement does not re
 windows, minimized windows, or dialogs.
 
 The service keeps one window memory: exact frames, floating windows included,
-keyed by app and title (or by the app's only window of that kind). It is loaded
+keyed by app and title (or by the app's only titled window of that kind). Untitled
+windows, such as Zoom's caption strip, are keyed by their Accessibility label, so
+Zoom's untitled or unsaved message boxes are never moved. It is loaded
 from =$XDG_STATE_HOME/twigwm/desktop.sexp= (default =~/.local/state=) at start,
 and again whenever that file changes. Command-arrow records the moved window's
 frame in memory, and every window that appears later is placed from it; windows
