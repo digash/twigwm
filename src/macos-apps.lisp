@@ -627,13 +627,40 @@ are never recorded, so from a remote session this is the last local window."
       (with-standard-io-syntax
         (let ((*read-eval* nil)) (read stream))))))
 
-(defun saved-entry (entries bundle title subrole)
-  "Exact title first; otherwise the bundle's one saved window of this subrole."
-  (let ((mine (remove bundle entries :key (lambda (e) (getf e :bundle)) :test-not #'equal)))
-    (or (find title mine :key (lambda (e) (getf e :title)) :test #'equal)
-        (let ((same (remove subrole mine :key (lambda (e) (getf e :subrole))
-                                         :test-not #'equal)))
-          (when (= 1 (length same)) (first same))))))
+(defun titled-p (text) (plusp (length text)))
+
+(defun saved-entry (entries description)
+  "The entry DESCRIPTION's window loads. A titled window: exact title, else the
+bundle's one titled non-dialog entry of its subrole. An untitled window: only
+an entry with its subrole and label."
+  (destructuring-bind (&key bundle title subrole label) description
+    (flet ((mine (key value)
+             (remove-if-not (lambda (e) (and (equal (getf e :bundle) bundle)
+                                             (equal (getf e key) value)))
+                            entries)))
+      (cond ((titled-p title)
+             (or (first (mine :title title))
+                 ;; Zoom opens arbitrary titled dialogs; they never borrow a frame.
+                 (unless (member subrole '("AXDialog" "AXSystemDialog") :test #'equal)
+                   (let ((same (remove-if-not (lambda (e) (titled-p (getf e :title)))
+                                              (mine :subrole subrole))))
+                     (when (= 1 (length same)) (first same))))))
+            ;; Zoom's message boxes are untitled too, so a label is required.
+            (label (find subrole (mine :label label)
+                         :key (lambda (e) (getf e :subrole)) :test #'equal))))))
+
+(defun window-label (window)
+  "WINDOW's description up to the first comma, else its first child's role.
+Zoom's video strip holds a tab group described by whoever is speaking."
+  (let ((text (or (ignore-errors (ax-text window "AXDescription"))
+                  (ignore-errors
+                    (with-cf (children (ax-get window "AXChildren"))
+                      (let ((child (first (cf-items children))))
+                        (format nil "~a ~a" (ax-text child "AXRole")
+                                (if (equal (ax-text child "AXRole") "AXTabGroup")
+                                    ""
+                                    (ax-text child "AXDescription")))))))))
+    (when (titled-p text) (string-trim " " (subseq text 0 (position #\, text))))))
 
 (defun window-description (window bundle)
   "Identity plist for WINDOW, or NIL for windows that are never recorded or placed."
@@ -641,13 +668,14 @@ are never recorded, so from a remote session this is the last local window."
     ;; AXUnknown covers Windows App's borderless per-display surfaces.
     (unless (or (ax-flag-p window "AXMinimized") (ax-flag-p window "AXFullScreen")
                 (equal subrole "AXUnknown"))
-      (list :bundle bundle :title (ignore-errors (ax-title window)) :subrole subrole))))
+      (let ((title (ignore-errors (ax-title window))))
+        (append (list :bundle bundle :title title :subrole subrole)
+                (unless (titled-p title) (list :label (window-label window))))))))
 
 (defun merge-entries (old new)
   "NEW entries, then the OLD ones that no NEW window would load."
   (dolist (entry new (append new old))
-    (setf old (remove (saved-entry old (getf entry :bundle) (getf entry :title)
-                                   (getf entry :subrole))
+    (setf old (remove (saved-entry old (subseq entry 0 (position :frame entry)))
                       old :test #'eq))))
 
 (defun mouse (kind x y)
@@ -682,7 +710,9 @@ drag but refuse Accessibility resizing."
 (defun apply-frame (window frame)
   (ax-set-pair window "AXPosition" 1 (subseq frame 0 2))
   (ignore-errors (ax-set-pair window "AXSize" 2 (subseq frame 2)))
-  (unless (equal (subseq (window-frame window) 2) (subseq frame 2))
+  ;; A drag clicks into the window: never into a standard window such as a remote session.
+  (unless (or (equal (subseq (window-frame window) 2) (subseq frame 2))
+              (equal (ignore-errors (ax-text window "AXSubrole")) "AXStandardWindow"))
     (drag-size window frame))
   (ax-set-pair window "AXPosition" 1 (subseq frame 0 2)))
 
@@ -705,8 +735,7 @@ drag but refuse Accessibility resizing."
 (defun window-entry (window bundle)
   (let ((description (window-description window bundle)))
     (when description
-      (saved-entry (desktop-memory) bundle (getf description :title)
-                   (getf description :subrole)))))
+      (saved-entry (desktop-memory) description))))
 
 (defun remember-window (window bundle)
   "Record WINDOW's current frame in memory; the file changes only on save-desktop."
@@ -815,9 +844,7 @@ are not open now are kept; an open window replaces the entry it would load."
         (lambda (window)
           (let* ((description (window-description window bundle))
                  (frame (and description
-                             (getf (saved-entry entries bundle (getf description :title)
-                                                (getf description :subrole))
-                                   :frame))))
+                             (getf (saved-entry entries description) :frame))))
             (when frame
               (apply-frame window frame)
               (incf count))))))
