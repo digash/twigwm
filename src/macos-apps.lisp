@@ -650,16 +650,18 @@ an entry with its subrole and label."
                          :key (lambda (e) (getf e :subrole)) :test #'equal))))))
 
 (defun window-label (window)
-  "WINDOW's description up to the first comma, else its first child's role.
-Zoom's video strip holds a tab group described by whoever is speaking."
+  "WINDOW's description up to the first comma, else its first child's role and
+description. Zoom's minimized meeting holds one video surface: a tab group
+described by whoever speaks, or a shared screen; both are \"video\"."
   (let ((text (or (ignore-errors (ax-text window "AXDescription"))
                   (ignore-errors
                     (with-cf (children (ax-get window "AXChildren"))
-                      (let ((child (first (cf-items children))))
-                        (format nil "~a ~a" (ax-text child "AXRole")
-                                (if (equal (ax-text child "AXRole") "AXTabGroup")
-                                    ""
-                                    (ax-text child "AXDescription")))))))))
+                      (let* ((child (first (cf-items children)))
+                             (role (ax-text child "AXRole")))
+                        (if (member role '("AXTabGroup" "AXUnknown") :test #'equal)
+                            "video"
+                            (format nil "~a ~a" role
+                                    (or (ignore-errors (ax-text child "AXDescription")) "")))))))))
     (when (titled-p text) (string-trim " " (subseq text 0 (position #\, text))))))
 
 (defun window-description (window bundle)
