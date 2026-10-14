@@ -61,12 +61,9 @@ already open when the service starts are left where they are.
 =twigwm save-desktop= merges every visible window's frame into the file, keeping
 saved windows that are not open now. =twigwm load-desktop= moves open windows back.
 
-Set =twigwm-macos-input:*swap-tab-modifiers*= to =t= in your configuration to
-use Option-Tab for the native Mac app switcher and Command-Tab for Alt-Tab in
-remote apps marked =:mac-passthrough t=. Shift cycles backwards; releasing the
-physical modifier selects. Command-Tab outside remote apps stays native.
-Either switcher cancels a pending keyboard handoff.
-The remote target remains fixed until release. Other shortcuts are unchanged.
+Command-Tab is the native Mac app switcher. In a remote app marked
+=:mac-passthrough t= it goes to the session instead, as s-Tab; use Command-Escape
+to return to the Mac. Either cancels a pending keyboard handoff.
 
 The example splits the primary display into left one third and right two thirds.
 =twigwm-macos-apps:screens= returns display UUIDs and geometry for configuring

@@ -15,8 +15,7 @@ The platform slots are deliberately NIL."
    (make-key
     :action :remote-next-window
     :doc "Alt-Tab shows the global MRU window list and selects on Alt release,
-as on Windows. With *swap-tab-modifiers* enabled, Mac Command-Tab sends Alt-Tab
-to remote apps and Option-Tab opens the local app switcher."
+as on Windows. In a remote session Mac Command-Tab arrives as s-Tab."
     :stump "M-Tab" :cmd "all-windowlist-cycle-next %m%n %c %s%t")
    (make-key
     :action :remote-previous-window
