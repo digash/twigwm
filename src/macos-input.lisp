@@ -4,10 +4,8 @@
 (load (merge-pathnames "keys.lisp" *load-truename*))
 (defpackage :twigwm-macos-input
   (:use :cl)
-  (:export #:probe #:run #:*number-device* #:*zero-device*
-           #:*swap-tab-modifiers*))
+  (:export #:probe #:run #:*number-device* #:*zero-device*))
 (in-package :twigwm-macos-input)
-(load (merge-pathnames "macos-tab.lisp" *load-truename*))
 
 ;;; Pure FIFO: readiness is explicit and belongs to one handoff generation.
 (defstruct handoff
@@ -40,7 +38,7 @@
 (defconstant +test-tag+ #x4349454c)
 (defconstant +replay-tag+ #x4349454d)
 (defconstant +heartbeat-tag+ #x4349454e)
-(defconstant +tab-tag+ #x4349454f)
+(defconstant +chord-tag+ #x4349454f)
 (defconstant +command+ #x100000)
 (defvar *handoff*)
 (defvar *callback-error* nil)
@@ -265,33 +263,8 @@
            (dolist (event (reverse events))
              (if pid
                  (post-to-app pid event)
-                 (post-event event +tab-tag+))))
+                 (post-event event +chord-tag+))))
       (release-events events))))
-
-(defun dispatch-tab-switch (code type flags)
-  ;; Connection Center is not a session: Command-Tab there stays native.
-  (multiple-value-bind (pid remote-p)
-      (if *tab-switch*
-          (values nil nil)
-          (values (twigwm-macos-apps:frontmost)
-                  (twigwm-macos-apps:remote-session-front-p *remote-bundles*)))
-    (multiple-value-bind (consumed target events)
-        (tab-switch-step code type flags remote-p pid)
-      (when consumed
-        (cancel)
-        (post-key-chord target events)
-        t))))
-
-(defun release-tab-switch ()
-  "Release a synthetic modifier if the tap exits during a switch."
-  (when *tab-switch*
-    (let* ((switch *tab-switch*)
-           (option-p (eq (tab-switch-source switch) :option)))
-      (setf *tab-switch* nil)
-      (post-key-chord
-       (tab-switch-pid switch)
-       (append (when (tab-switch-tab-down switch) '((48 11 0)))
-               (list (list (if option-p 55 58) 12 0)))))))
 
 (defun dispatch-native-key (event pid bundle &optional local-p)
   "Consume one native action and its repeats/release, including buffered input."
@@ -355,8 +328,8 @@
          (setf *callback-error* "macOS disabled the event tap")
          event)
         ((and (not (cffi:null-pointer-p event))
-              (= (event-field event 42) +tab-tag+))
-         event)                                    ; translated local switch, never remap again
+              (= (event-field event 42) +chord-tag+))
+         event)                                    ; synthetic chord, never remap again
         ((and (not (cffi:null-pointer-p event))
               (= (event-field event 42) +heartbeat-tag+))
          (setf *heartbeat* t)
@@ -382,10 +355,6 @@
                 (native (and *live* (= type 10)
                              (or (native-key-spec code) (movement-direction code modifiers)))))
            (cond
-             ((and *live* *swap-tab-modifiers*
-                   (or *tab-switch* (= code 48))
-                   (dispatch-tab-switch code type (event-flags event)))
-              (cffi:null-pointer))
              ((and *escape-cycle* (= type 12) (not (logtest modifiers *prefix-modifiers*)))
               ;; Releasing the modifier ends a Command-Escape cycle, as Super
               ;; release does for StumpWM's s-Tab; the release itself passes on.
@@ -395,10 +364,15 @@
              (held
               (when (= type 11) (remhash code *app-down*))
               (cffi:null-pointer))
-             ;; Even during a handoff, native Command-Tab must remain native.
              ((and (= code 48) (logtest modifiers +command+))
+              ;; Command-Tab is the Mac app switcher, even during a handoff. A remote
+              ;; session gets it directly, as s-Tab; Command-Escape returns home.
               (cancel)
-              event)
+              ;; Connection Center is not a session: Command-Tab there stays native.
+              (if (and *live* (twigwm-macos-apps:remote-session-front-p *remote-bundles*))
+                  (progn (post-to-app (twigwm-macos-apps:frontmost) event)
+                         (cffi:null-pointer))
+                  event))
              ((and (= code 53) *escape-down*)
               (when (= type 11) (setf *escape-down* nil))
               (cffi:null-pointer))
@@ -443,7 +417,6 @@
       ;; Do not unwind Lisp errors through Apple's callback stack.
       (setf *callback-error* (princ-to-string e))
       (cancel)
-      (ignore-errors (release-tab-switch))
       (cffi:null-pointer))))
 
 (defun probe-event (code type flags &optional (tag +test-tag+) post)
@@ -563,7 +536,6 @@
              (release-events (list source))))
       (cancel)
       (cffi:foreign-funcall "CFMachPortInvalidate" :pointer tap :void)
-      (release-tab-switch)
       (release-events (list tap)))))
 
 (defun probe ()
@@ -580,7 +552,6 @@
   "Resident app shortcuts; SECONDS bounds a trial, NIL runs until stopped."
   (let* ((*live* t) (*lease* nil) (*prefix-modifiers* modifiers) (*escape-down* nil)
          (*escape-cycle* nil)
-         (*tab-switch* nil)
          (apps (twigwm-apps:apps-for-mac))
          (*remote-bundles* (twigwm-apps:mac-passthrough-bundles apps))
          (history-stop (sb-thread:make-semaphore)) (history-thread nil)
