@@ -98,47 +98,28 @@
 
 (when (uiop:os-macosx-p) (probe))
 
-;; Tab adapter pins the destination, cancels handoffs, and releases on shutdown.
-(let ((frontmost (symbol-function 'twigwm-macos-apps:frontmost))
-      (post-chord (symbol-function 'post-key-chord))
-      (*handoff* (make-handoff)) (*lease* (make-lease))
-      (*tab-switch* nil)
-      (*remote-bundles* '("com.microsoft.rdc.macos")) (posted nil))
-  (unwind-protect
-       (progn
-         (setf (symbol-function 'twigwm-macos-apps:frontmost)
-               (lambda () (values 123 "com.microsoft.rdc.macos"))
-               (symbol-function 'post-key-chord)
-               (lambda (pid chord) (push (list pid chord) posted)))
-         (arm *handoff*)
-         (assert (dispatch-tab-switch 48 10 #x100008))
-         (assert (lease-cancelled-p *lease*))
-         (assert (not (handoff-pending *handoff*)))
-         (assert (equal (first posted)
-                        '(123 ((55 12 0) (58 12 #x80020) (48 10 #x80020)))))
-         (release-tab-switch)
-         (assert (equal (first posted) '(123 ((48 11 0) (58 12 0)))))
-         (assert (not *tab-switch*))
-         (assert (dispatch-tab-switch 48 10 #x80020))
-         (assert (null (caar posted))) ; local switcher uses global delivery
-         (release-tab-switch)
-         (assert (equal (first posted) '(nil ((48 11 0) (55 12 0)))))
-         ;; On macOS, also exercise callback priority and the replay guard.
-         (when (uiop:os-macosx-p)
-           (let ((*live* t) (*swap-tab-modifiers* t) (*callback-error* nil))
-             (assert (probe-event 48 10 #x100008))
-             (assert (probe-event 48 11 #x100008))
-             (assert (probe-event 55 12 0))
-             (assert (not *tab-switch*))
-             (assert (probe-event 48 10 #x80020))
-             (assert (not (probe-event 48 10 #x100008 +tab-tag+)))
-             (assert (probe-event 58 12 0))
-             (assert (probe-event 48 11 0))
-             (assert (not *tab-switch*))
-             (assert (not *callback-error*)))))
-    (setf (symbol-function 'twigwm-macos-apps:frontmost) frontmost
-          (symbol-function 'post-key-chord) post-chord)))
-(format t "PASS: Tab adapter routing, handoff cancellation, and shutdown releases.~%")
+;; Command-Tab: native in Mac apps; a remote session receives it directly, as s-Tab.
+(when (uiop:os-macosx-p)
+  (let ((frontmost (symbol-function 'twigwm-macos-apps:frontmost))
+        (post (symbol-function 'post-to-app))
+        (*handoff* (make-handoff)) (*lease* nil)
+        (*remote-bundles* '("com.microsoft.rdc.macos")) (bundle "com.apple.finder") (posted nil))
+    (unwind-protect
+         (let ((*live* t) (*callback-error* nil))
+           (setf (symbol-function 'twigwm-macos-apps:frontmost) (lambda () (values 123 bundle))
+                 (symbol-function 'post-to-app) (lambda (pid event)
+                                                  (push (cons pid (event-description event)) posted)))
+           (assert (not (probe-event 48 10 #x100008)))
+           (assert (null posted))
+           (setf bundle "com.microsoft.rdc.macos")
+           (assert (probe-event 48 10 #x100008))
+           (assert (probe-event 48 11 #x100008))
+           (assert (equal (reverse posted) '((123 48 10 #x100008) (123 48 11 #x100008))))
+           (assert (not (probe-event 48 10 #x80020)))
+           (assert (not *callback-error*)))
+      (setf (symbol-function 'twigwm-macos-apps:frontmost) frontmost
+            (symbol-function 'post-to-app) post))))
+(format t "PASS: Command-Tab stays native in Mac apps and reaches remote sessions as s-Tab.~%")
 
 
 ;; Native callback routing, with no worker, guest command, or app delivery.

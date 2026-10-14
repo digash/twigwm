@@ -4,10 +4,8 @@
 (load (merge-pathnames "keys.lisp" *load-truename*))
 (defpackage :twigwm-macos-input
   (:use :cl)
-  (:export #:probe #:run #:*number-device* #:*zero-device*
-           #:*swap-tab-modifiers*))
+  (:export #:probe #:run #:*number-device* #:*zero-device*))
 (in-package :twigwm-macos-input)
-(load (merge-pathnames "macos-tab.lisp" *load-truename*))
 
 ;;; Pure FIFO: readiness is explicit and belongs to one handoff generation.
 (defstruct handoff
@@ -40,7 +38,7 @@
 (defconstant +test-tag+ #x4349454c)
 (defconstant +replay-tag+ #x4349454d)
 (defconstant +heartbeat-tag+ #x4349454e)
-(defconstant +tab-tag+ #x4349454f)
+(defconstant +chord-tag+ #x4349454f)
 (defconstant +command+ #x100000)
 (defvar *handoff*)
 (defvar *callback-error* nil)
@@ -263,30 +261,8 @@
            (dolist (event (reverse events))
              (if pid
                  (post-to-app pid event)
-                 (post-event event +tab-tag+))))
+                 (post-event event +chord-tag+))))
       (release-events events))))
-
-(defun dispatch-tab-switch (code type flags)
-  (multiple-value-bind (pid bundle)
-      (if *tab-switch* (values nil nil) (twigwm-macos-apps:frontmost))
-    (multiple-value-bind (consumed target events)
-        (tab-switch-step code type flags
-                         (member bundle *remote-bundles* :test #'equal) pid)
-      (when consumed
-        (cancel)
-        (post-key-chord target events)
-        t))))
-
-(defun release-tab-switch ()
-  "Release a synthetic modifier if the tap exits during a switch."
-  (when *tab-switch*
-    (let* ((switch *tab-switch*)
-           (option-p (eq (tab-switch-source switch) :option)))
-      (setf *tab-switch* nil)
-      (post-key-chord
-       (tab-switch-pid switch)
-       (append (when (tab-switch-tab-down switch) '((48 11 0)))
-               (list (list (if option-p 55 58) 12 0)))))))
 
 (defun dispatch-native-key (event pid bundle &optional local-p)
   "Consume one native action and its repeats/release, including buffered input."
@@ -350,8 +326,8 @@
          (setf *callback-error* "macOS disabled the event tap")
          event)
         ((and (not (cffi:null-pointer-p event))
-              (= (event-field event 42) +tab-tag+))
-         event)                                    ; translated local switch, never remap again
+              (= (event-field event 42) +chord-tag+))
+         event)                                    ; synthetic chord, never remap again
         ((and (not (cffi:null-pointer-p event))
               (= (event-field event 42) +heartbeat-tag+))
          (setf *heartbeat* t)
@@ -377,17 +353,18 @@
                 (native (and *live* (= type 10)
                              (or (native-key-spec code) (movement-direction code modifiers)))))
            (cond
-             ((and *live* *swap-tab-modifiers*
-                   (or *tab-switch* (= code 48))
-                   (dispatch-tab-switch code type (event-flags event)))
-              (cffi:null-pointer))
              (held
               (when (= type 11) (remhash code *app-down*))
               (cffi:null-pointer))
-             ;; Even during a handoff, native Command-Tab must remain native.
              ((and (= code 48) (logtest modifiers +command+))
+              ;; Command-Tab is the Mac app switcher, even during a handoff. A remote
+              ;; session gets it directly, as s-Tab; Command-Escape returns home.
               (cancel)
-              event)
+              (multiple-value-bind (pid bundle) (if *live* (twigwm-macos-apps:frontmost))
+                (cond ((and pid (member bundle *remote-bundles* :test #'equal))
+                       (post-to-app pid event)
+                       (cffi:null-pointer))
+                      (t event))))
              ((and (= code 53) *escape-down*)
               (when (= type 11) (setf *escape-down* nil))
               (cffi:null-pointer))
@@ -432,7 +409,6 @@
       ;; Do not unwind Lisp errors through Apple's callback stack.
       (setf *callback-error* (princ-to-string e))
       (cancel)
-      (ignore-errors (release-tab-switch))
       (cffi:null-pointer))))
 
 (defun probe-event (code type flags &optional (tag +test-tag+) post)
@@ -552,7 +528,6 @@
              (release-events (list source))))
       (cancel)
       (cffi:foreign-funcall "CFMachPortInvalidate" :pointer tap :void)
-      (release-tab-switch)
       (release-events (list tap)))))
 
 (defun probe ()
@@ -568,7 +543,6 @@
 (defun run (&key seconds (modifiers +command+))
   "Resident app shortcuts; SECONDS bounds a trial, NIL runs until stopped."
   (let* ((*live* t) (*lease* nil) (*prefix-modifiers* modifiers) (*escape-down* nil)
-         (*tab-switch* nil)
          (apps (twigwm-apps:apps-for-mac))
          (*remote-bundles* (twigwm-apps:mac-passthrough-bundles apps))
          (remote *remote-bundles*)
