@@ -16,7 +16,7 @@
 
 (in-package :twigwm-w32)
 
-(defvar *frame-names* '("VTerm"))
+(defvar *frame-names* '())
 
 ;;; ——— connection ———
 
@@ -149,7 +149,7 @@ for correct WSLg taskbar icons."
     (dolist (pair (chrome-desktop-apps))
       (dolist (w (find-wins wins (cdr pair)))       ; match crx_ instance
         (rename-win w (car pair) (car pair))))
-    ;; Emacs named sub-frames (VTerm etc.) already carry their name as WM_NAME;
+    ;; Emacs named sub-frames already carry their name as WM_NAME;
     ;; give them a distinct class so the taskbar separates them.
     (dolist (name *frame-names*)
       (dolist (w (find-wins (app-wins root) name))
@@ -263,7 +263,7 @@ doing it on the keypress is predictable instead of racing the compositor."
               ;; wsl.exe, which hands us AHK's Windows working directory
               ;; (/c/Users/<user>/AppData/Local/AutoHotkey). emacsclient passes its
               ;; cwd to the daemon as the new frame's default-directory, so without
-              ;; this s-1/s-3 opened vterm and Emacs there instead of at home.
+              ;; this Win+N opened Emacs frames there instead of at home.
               (uiop:launch-program (list "sh" "-c" cmd)
                                    :directory (uiop:getenv "HOME"))
               (await-window a monitors)
