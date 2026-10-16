@@ -2,7 +2,7 @@
 (load (merge-pathnames "../src/load.lisp" *load-truename*))
 (in-package :twigwm-apps)
 (setf *apps*
-      (list (make-app :name "vterm" :n 1 :mac "org.gnu.Emacs" :mac-region :landscape-left
+      (list (make-app :name "eat" :n 1 :mac "org.gnu.Emacs" :mac-region :landscape-left
                       :mac-cmd '("emacsclient" "--eval" "(other-frame 1)"))
             (make-app :name "browser" :n 2 :mac "com.google.Chrome")
             (make-app :name "remote" :n 0 :mac "com.microsoft.rdc.macos"
