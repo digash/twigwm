@@ -268,7 +268,7 @@
 (format t "PASS: memory loads from file, start records without moving, new windows placed once, arrows update memory not the file, save-desktop reloads.~%")
 
 (let ((calls nil)
-      (app (find "eat" twigwm-apps:*apps* :key #'twigwm-apps:app-name :test #'equal)))
+      (app (find "terminal" twigwm-apps:*apps* :key #'twigwm-apps:app-name :test #'equal)))
   (with-test-functions
       ((open-bundle (lambda (bundle) (push (list :open bundle) calls)))
        (output (lambda (argv) (push (list :select argv) calls)))

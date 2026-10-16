@@ -58,7 +58,6 @@ see terminals, which are not part of the WSLg app set)."
 (defun wslg-title (a)
   "Substring guaranteed to appear in A's Windows-visible (WSLg) title."
   (case (app-kind a)
-    (:terminal "VTerm")
     (:browser "Google Chrome")
     (:emacs "Emacs")
     (t (app-title a))))
