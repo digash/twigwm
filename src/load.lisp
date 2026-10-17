@@ -19,8 +19,6 @@
     (let ((*package* (find-package :cl-user))) (load path))))
 
 (defun main (args)
-  (when (member (first args) '("session" "arrange" "watch" "start" "emit-ahk") :test #'equal)
-    (load (merge-pathnames "w32.lisp" *source-directory*)))
   (load-config)
   (let ((command (first args)))
     (cond
@@ -32,13 +30,6 @@
       ((equal command "session")
        (if *session-function* (funcall *session-function*)
            (uiop:run-program '("stumpwm") :output :interactive :error-output :interactive)))
-      ((member command '("arrange" "watch") :test #'equal)
-       (funcall (find-symbol (string-upcase command) :twigwm-w32)
-                (if (second args) (parse-integer (second args)) 1)))
-      ((equal command "start")
-       (unless (funcall (find-symbol "START-APP" :twigwm-w32) (second args))
-         (error "Unknown application: ~a" (second args))))
-      ((equal command "emit-ahk") (funcall (find-symbol "EMIT-AHK" :twigwm-w32)))
       ((member command '(nil "--help" "help") :test #'equal)
-       (format t "TwigWM: mac-input | mac-input-trial | mac-input-poc | save-desktop | load-desktop | session | arrange [N] | watch [N] | start NAME | emit-ahk~%"))
+       (format t "TwigWM: mac-input | mac-input-trial | mac-input-poc | save-desktop | load-desktop | session~%"))
       (t (error "Unknown TwigWM command: ~a" command)))))

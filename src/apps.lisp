@@ -8,8 +8,8 @@
            #:app-n #:app-kind #:app-hosts
            #:app-key #:app-fullscreen
            #:app-mac #:app-mac-cmd #:app-mac-passthrough #:app-mac-region
-           #:*apps* #:*mac-host* #:host-match-p #:apps-for-host #:wslg-app-p #:wslg-title
-           #:win-numbers #:app-for-number
+           #:*apps* #:*mac-host* #:host-match-p #:apps-for-host
+           #:app-for-number
            #:chrome-desktop-apps #:chrome-mac-apps #:chrome-apps #:pwa-crx-id
            #:apps-for-mac #:mac-bundle #:mac-numbers #:mac-passthrough-bundles))
 
@@ -50,20 +50,8 @@ KEY binds a literal key instead of s-N; FULLSCREEN fullscreens what it raises."
   "Registry entries applicable to HOSTNAME, in registry order."
   (remove-if-not (lambda (a) (host-match-p (app-hosts a) hostname)) *apps*))
 
-(defun wslg-app-p (a)
-  "True if A actually shows a window under WSLg (excludes native-Linux-only and
-see terminals, which are not part of the WSLg app set)."
-  (member (app-kind a) '(:terminal :browser :emacs :pwa)))
-
-(defun wslg-title (a)
-  "Substring guaranteed to appear in A's Windows-visible (WSLg) title."
-  (case (app-kind a)
-    (:browser "Google Chrome")
-    (:emacs "Emacs")
-    (t (app-title a))))
-
 (defun win-numbers (apps)
-  "Sorted distinct non-zero s-N / Win+N numbers present in APPS. Entries with a
+  "Sorted distinct non-zero s-N numbers present in APPS. Entries with a
 NIL number carry no shortcut at all, and drop out here."
   (sort (remove-duplicates (remove 0 (remove-if-not #'integerp (mapcar #'app-n apps))))
         #'<))
@@ -75,8 +63,8 @@ last-wins define-key). APPS should already be host-filtered."
     (car (last matches))))
 
 ;;; ——— chrome PWAs: title -> crx id ———
-;;; Shared with twigwm-w32 (taskbar renaming) and native macOS app shortcuts:
-;;; all three need the same title -> crx mapping defweb-shortcut resolves.
+;;; Shared by StumpWM PWA shortcuts and native macOS app shortcuts: both need
+;;; the same title -> crx mapping defweb-shortcut resolves.
 
 (defun parse-chrome-desktop (f)
   "Return (NAME . CRX-ID) parsed from a chrome-*.desktop file, or NIL."
