@@ -17,6 +17,7 @@
   CMD     StumpWM command string STUMP runs
   MAC     Native input plist: :keycode CODE :modifiers MASK (default zero),
           :bundle ID or :argv (PROGRAM ARG...), with ~/ resolved in Lisp.
+          :maximize T toggles the focused window within its display, preserving borders.
           :chord ((BUNDLE (CODE TYPE FLAGS)...)) sends a chord to a named app.
           Other modifiers/remotes pass through."
   action doc stump cmd mac)

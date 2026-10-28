@@ -65,14 +65,19 @@
   (when (= modifiers +command+)
     (cdr (assoc code '((123 . :left) (124 . :right) (125 . :down) (126 . :up))))))
 
-(defun queue-window-move (pid bundle direction &optional local-p)
-  ;; After the local prefix, even a remote app's window moves instead of passing through.
+(defun queue-window-action (pid bundle action &optional local-p)
+  "Queue movement or maximize/restore for the captured window; fail open if unavailable."
   (let ((window (twigwm-macos-apps:movable-window
                  pid (and (not local-p) (member bundle *remote-bundles* :test #'equal)))))
-    (when window (queue-app-action :move window direction bundle) t)))
+    (when window
+      (if (eq action :maximize)
+          (queue-app-action :maximize window pid bundle)
+          (queue-app-action :move window action bundle))
+      t)))
 
 (defun release-app-action (action)
-  (when (eq (first action) :move)
+  "Release the owned Accessibility window captured by a queued window action."
+  (when (member (first action) '(:move :maximize))
     (cffi:foreign-funcall "CFRelease" :pointer (second action) :void)))
 
 (defun number-key (code)
@@ -87,10 +92,12 @@
         when (eql code (getf mac :keycode)) return mac))
 
 (defun native-key-action (spec modifiers bundle)
+  "Resolve an exact modifier match, leaving remote applications' native keys alone."
   (when (= modifiers (getf spec :modifiers 0))
     (or (cdr (assoc bundle (getf spec :chord) :test #'equal))
         (unless (member bundle *remote-bundles* :test #'equal)
           (or (getf spec :bundle)
+              (when (getf spec :maximize) :maximize)
               (when (getf spec :argv) (list :launch (getf spec :argv))))))))
 
 (defun launch-native-command (argv)
@@ -116,6 +123,7 @@
   (place-app app bundle))
 
 (defun service-apps ()
+  "Run queued application and window actions outside the event-tap callback."
   (when (and *app-actions* (not (and *app-thread* (sb-thread:thread-alive-p *app-thread*))))
     (let ((action (pop *app-actions*)) (remote *remote-bundles*))
       (setf *app-thread*
@@ -129,7 +137,9 @@
                           (:saved-device (apply #'twigwm-macos-apps:open-saved-device (rest action)))
                           (:previous-window (twigwm-macos-apps:previous-window remote))
                           (:finish-cycle (twigwm-macos-apps:finish-cycle))
-                          (:move (apply #'twigwm-macos-apps:move-window (rest action))))
+                          (:move (apply #'twigwm-macos-apps:move-window (rest action)))
+                          (:maximize (apply #'twigwm-macos-apps:toggle-maximize-window
+                                            (rest action))))
                       (error (e) (format *error-output* "App shortcut failed: ~a~%" e)))
                  (release-app-action action)))
              :name "Mac app shortcut")))))
@@ -266,11 +276,9 @@
                  (post-event event +chord-tag+))))
       (release-events events))))
 
-(defun dispatch-native-key (event pid bundle &optional local-p)
-  "Consume one native action and its repeats/release, including buffered input."
-  (let* ((code (event-field event 9))
-         (type (cffi:foreign-funcall "CGEventGetType" :pointer event :uint32))
-         (modifiers (logand (event-flags event) #x1e0000))
+(defun dispatch-native-fields (code type flags pid bundle &optional local-p)
+  "Consume a parsed native key action and its paired repeats/release."
+  (let* ((modifiers (logand flags #x1e0000))
          (direction (movement-direction code modifiers))
          (spec (and (or bundle local-p) (native-key-spec code))))
     (when (or spec direction (gethash code *app-down*))
@@ -280,14 +288,22 @@
          t)
         ((= type 10)
          (let ((action (and spec (native-key-action spec modifiers (unless local-p bundle)))))
-           (when (or (and direction (queue-window-move pid bundle direction local-p)) action)
+           (when (cond (direction (queue-window-action pid bundle direction local-p))
+                       ((eq action :maximize) (queue-window-action pid bundle :maximize local-p))
+                       (t action))
              (setf (gethash code *app-down*) t)
-             (when action
+             (when (and action (not (eq action :maximize)))
                (cond ((and (consp action) (eq (first action) :launch))
                       (apply #'queue-app-action action))
                      ((consp action) (post-key-chord pid action))
                      (t (queue-app-action :activate nil action))))
              t)))))))
+
+(defun dispatch-native-key (event pid bundle &optional local-p)
+  "Decode and consume a native action, including input buffered during handoff."
+  (dispatch-native-fields (event-field event 9)
+                          (cffi:foreign-funcall "CGEventGetType" :pointer event :uint32)
+                          (event-flags event) pid bundle local-p))
 
 (defun service-tick ()
   (when *lease*
