@@ -4,7 +4,8 @@
   (:shadow #:class)
   (:export #:focus #:rdp-pid #:submit #:nonce #:await
            #:frontmost #:remote-session-front-p #:open-bundle #:focus-windows #:open-saved-device #:place-bundle
-           #:movable-window #:move-window #:load-memory #:place-new-windows #:reset-seen
+           #:movable-window #:move-window #:toggle-maximize-window
+           #:load-memory #:place-new-windows #:reset-seen
            #:record-front-window #:previous-window #:finish-cycle #:reset-window-history
            #:screens #:*displays* #:*regions* #:*guest-command*
            #:save-desktop #:load-desktop #:*desktop-file*))
@@ -359,44 +360,58 @@ SCREENS contains (UUID bounds visible-bounds), all in logical AX coordinates."
         ;; Cocoa has a bottom-left origin; AX has a top-left origin.
         (list x (- primary-height y height) width height)))))
 
+(defun rect-overlap (a b axis)
+  "Return the length shared by rectangles A and B along AXIS."
+  (max 0 (- (min (+ (nth axis a) (nth (+ axis 2) a))
+                 (+ (nth axis b) (nth (+ axis 2) b)))
+            (max (nth axis a) (nth axis b)))))
+
+(defun rect-center (rect axis)
+  "Return RECT's center coordinate along AXIS."
+  (+ (nth axis rect) (/ (nth (+ axis 2) rect) 2)))
+
+(defun rectangles-by-overlap (rect entries)
+  "Order a copy of (KEY . RECTANGLE) ENTRIES by overlap, then center distance."
+  (flet ((area (bounds)
+           "Measure RECT's intersection with BOUNDS."
+           (* (rect-overlap rect bounds 0) (rect-overlap rect bounds 1)))
+         (distance (bounds)
+           "Measure squared center distance from RECT to BOUNDS."
+           (+ (expt (- (rect-center rect 0) (rect-center bounds 0)) 2)
+              (expt (- (rect-center rect 1) (rect-center bounds 1)) 2))))
+    (stable-sort (copy-list entries)
+                 (lambda (a b)
+                   "Prefer greater overlap, then the nearer rectangle."
+                   (let ((oa (area (cdr a))) (ob (area (cdr b))))
+                     (if (= oa ob) (< (distance (cdr a)) (distance (cdr b)))
+                         (> oa ob)))))))
+
 (defun neighbor-region (rect direction screens)
   "Find the current region by overlap, then its nearest aligned neighbor.
 No wraparound or diagonal jumps; monitor gaps and negative origins are allowed."
-  (labels ((overlap (a b axis)
-             (max 0 (- (min (+ (nth axis a) (nth (+ axis 2) a))
-                            (+ (nth axis b) (nth (+ axis 2) b)))
-                       (max (nth axis a) (nth axis b)))))
-           (center (r axis) (+ (nth axis r) (/ (nth (+ axis 2) r) 2)))
-           (distance (a b)
-             (+ (expt (- (center a 0) (center b 0)) 2)
-                (expt (- (center a 1) (center b 1)) 2))))
-    (let* ((regions (loop for (name) in *regions*
-                          for bounds = (region-rect name screens)
-                          when bounds collect (cons name bounds)))
-           (current (first (setf regions (stable-sort regions
-                            (lambda (a b)
-                              (let ((oa (* (overlap rect (cdr a) 0) (overlap rect (cdr a) 1)))
-                                    (ob (* (overlap rect (cdr b) 0) (overlap rect (cdr b) 1))))
-                                (if (= oa ob) (< (distance rect (cdr a)) (distance rect (cdr b)))
-                                    (> oa ob))))))))
-           (axis (ecase direction ((:left :right) 0) ((:up :down) 1)))
-           (cross (- 1 axis))
-           (positive (member direction '(:right :down)))
-           (best nil) (best-gap nil) (best-overlap nil) (best-offset nil))
-      (when current
-        (dolist (candidate regions)
-          (let* ((a (cdr current)) (b (cdr candidate))
-                 (gap (if positive (- (nth axis b) (+ (nth axis a) (nth (+ axis 2) a)))
-                          (- (nth axis a) (+ (nth axis b) (nth (+ axis 2) b)))))
-                 (shared (overlap a b cross))
-                 (offset (abs (- (center a cross) (center b cross)))))
-            (when (and (not (eq candidate current)) (>= gap 0) (plusp shared)
-                       (or (null best-gap) (< gap best-gap)
-                           (and (= gap best-gap)
-                                (or (> shared best-overlap)
-                                    (and (= shared best-overlap) (< offset best-offset))))))
-              (setf best (car candidate) best-gap gap best-overlap shared best-offset offset)))))
-      (values best (car current)))))
+  (let* ((regions (rectangles-by-overlap
+                   rect (loop for (name) in *regions*
+                              for bounds = (region-rect name screens)
+                              when bounds collect (cons name bounds))))
+         (current (first regions))
+         (axis (ecase direction ((:left :right) 0) ((:up :down) 1)))
+         (cross (- 1 axis))
+         (positive (member direction '(:right :down)))
+         (best nil) (best-gap nil) (best-overlap nil) (best-offset nil))
+    (when current
+      (dolist (candidate regions)
+        (let* ((a (cdr current)) (b (cdr candidate))
+               (gap (if positive (- (nth axis b) (+ (nth axis a) (nth (+ axis 2) a)))
+                        (- (nth axis a) (+ (nth axis b) (nth (+ axis 2) b)))))
+               (shared (rect-overlap a b cross))
+               (offset (abs (- (rect-center a cross) (rect-center b cross)))))
+          (when (and (not (eq candidate current)) (>= gap 0) (plusp shared)
+                     (or (null best-gap) (< gap best-gap)
+                         (and (= gap best-gap)
+                              (or (> shared best-overlap)
+                                  (and (= shared best-overlap) (< offset best-offset))))))
+            (setf best (car candidate) best-gap gap best-overlap shared best-offset offset)))))
+    (values best (car current))))
 
 (defun screens ()
   (with-pool
@@ -777,15 +792,26 @@ drag but refuse Accessibility resizing."
         (setf *desktop* (merge-entries *desktop* (list (append description
                                                                (list :frame (window-frame window))))))))))
 
-;;; Retained (WINDOW . PID) for windows already considered by the watcher.
 (defvar *seen* nil)
 
 (defun retain (object) (cffi:foreign-funcall "CFRetain" :pointer object :pointer))
 (defun release (object) (cffi:foreign-funcall "CFRelease" :pointer object :void))
 
+(defun window-state (window pid)
+  "Return WINDOW's retained (WINDOW PID MAXIMIZE-STATE) entry and whether it is new."
+  (sb-thread:with-mutex (*desktop-lock*)
+    (let ((entry (find window *seen* :key #'car :test #'cf-equal)))
+      (if entry
+          (values entry nil)
+          (let ((new (list (retain window) pid nil)))
+            (push new *seen*)
+            (values new t))))))
+
 (defun reset-seen ()
-  (mapc #'release (mapcar #'car *seen*))
-  (setf *seen* nil))
+  "Release tracked windows and discard their transient maximize/restore state."
+  (sb-thread:with-mutex (*desktop-lock*)
+    (mapc #'release (mapcar #'car *seen*))
+    (setf *seen* nil)))
 
 (defun place-new-windows (&optional (move t))
   "Place each window not seen before from memory. MOVE NIL only records them,
@@ -794,18 +820,43 @@ so a service start never rearranges what is already open."
   (let ((apps (running-apps)))
     ;; Closed windows stay recorded until their app exits: an Accessibility
     ;; timeout must not make an open window look new and snap it back.
-    (setf *seen* (remove-if (lambda (entry)
-                              (unless (assoc (cdr entry) apps)
+    (sb-thread:with-mutex (*desktop-lock*)
+      (setf *seen* (remove-if (lambda (entry)
+                              "Release state belonging to applications that have exited."
+                              (unless (assoc (second entry) apps)
                                 (release (car entry))
                                 t))
-                            *seen*))
+                            *seen*)))
     (loop for (pid . bundle) in apps do
       (app-windows pid
         (lambda (window)
-          (unless (find window *seen* :key #'car :test #'cf-equal)
-            (push (cons (retain window) pid) *seen*)
+          "Place only windows first registered by the watcher."
+          (when (nth-value 1 (window-state window pid))
             (let ((frame (and move (getf (window-entry window bundle) :frame))))
               (when frame (apply-frame window frame)))))))))
+
+(defun toggle-maximize-window (window pid bundle)
+  "Toggle WINDOW between its current display's usable area and its previous frame.
+Borders and native fullscreen state are untouched. A manual move or resize starts
+anew; restore state belongs to the live window, not its changing title."
+  (ax-timeout window 0.2)
+  (let* ((before (window-frame window))
+         (screen (caar (rectangles-by-overlap
+                        before (loop for screen in (screens)
+                                     collect (cons screen (second screen))))))
+         (state (window-state window pid))
+         (saved (third state))
+         (restore (and saved (equal before (second saved))))
+         (target (and screen (if restore (first saved) (third screen)))))
+    (if target
+        (let ((result (place-window window target)))
+          (if (eq result :placed)
+              (progn
+                (setf (third state) (unless restore (list before (window-frame window))))
+                (remember-window window bundle)
+                (if restore :restored :maximized))
+              result))
+        :no-display)))
 
 (defun move-window (window direction bundle)
   (ax-timeout window 0.2)

@@ -41,6 +41,10 @@ This installs the per-user =org.twigwm.input= LaunchAgent. Its log is
 
 - Command-1 through Command-9 run or raise the assigned application.
 - Command-arrow moves the focused window between configured regions.
+- Option-F10 in the example key table toggles the focused window between its
+  previous frame and the current display's full usable area. It keeps native
+  borders and the title bar, without entering a fullscreen Space. Remote apps
+  receive the original chord. Hold Fn too if the keyboard uses media keys.
 - Command-Escape returns at once to the previous individual window, including
   another window of the same application. From a remote session (an app
   marked =:mac-passthrough t=) it returns to the last local window, even when
@@ -55,11 +59,19 @@ keyed by app and title (or by the app's only titled window of that kind). Untitl
 windows, such as Zoom's caption strip, are keyed by their Accessibility label, so
 Zoom's untitled or unsaved message boxes are never moved. It is loaded
 from =$XDG_STATE_HOME/twigwm/desktop.sexp= (default =~/.local/state=) at start,
-and again whenever that file changes. Command-arrow records the moved window's
-frame in memory, and every window that appears later is placed from it; windows
+and again whenever that file changes. Command-arrow and maximize/restore record
+the window's frame in memory, and every window that appears later is placed from it; windows
 already open when the service starts are left where they are.
 =twigwm save-desktop= merges every visible window's frame into the file, keeping
 saved windows that are not open now. =twigwm load-desktop= moves open windows back.
+
+Maximize chooses the display with the greatest overlap, using center distance
+to break ties. It uses macOS's visible bounds rather than a configured tile,
+so the menu bar and Dock stay clear. Restore bounds are transient state for
+each live Accessibility window, independent of its title; restarting the
+service clears them. A manual move or resize starts a new maximize/restore
+cycle. Native fullscreen, minimized windows and dialogs are not changed.
+The =:maximize t= native key option enables this action for a configured chord.
 
 Command-Tab is the native Mac app switcher. In a remote app marked
 =:mac-passthrough t= it goes to the session instead, as s-Tab; use Command-Escape

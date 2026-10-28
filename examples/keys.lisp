@@ -21,6 +21,13 @@ as on Windows. In a remote session Mac Command-Tab arrives as s-Tab."
     :doc "Alt-Shift-Tab cycles the same global MRU list in reverse."
     :stump "M-ISO_Left_Tab" :cmd "all-windowlist-cycle-previous %m%n %c %s%t")
 
+   (make-key
+    :action :maximize-window
+    :doc "Option-F10 toggles the focused Mac window between its previous frame and
+the current display's usable area, retaining title bar and borders. Remote
+applications receive the original chord. StumpWM has no binding for this row."
+    :mac '(:keycode 109 :modifiers #x80000 :maximize t))
+
    ;;; local screenshots — Print, M-Print, s-Print, in that order of scope
    (make-key
     :action :screenshot-region
