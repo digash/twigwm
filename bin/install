@@ -48,12 +48,14 @@ across rebuilds, where the ad-hoc \"-\" loses them."
                (run (namestring runtime) "--core" (namestring sb-ext:*core-pathname*) "--noinform"
                     "--end-runtime-options" "--no-userinit" "-e"
                     (with-standard-io-syntax
-                      (prin1-to-string
-                       `(progn
-                          (load ,(namestring (merge-pathnames "src/load.lisp" root)))
-                          (setf uiop:*image-entry-point* (lambda () (funcall (find-symbol "COMMAND-LINE" "TWIGWM")))
-                                uiop/image::*image-restored-p* nil)
-                          (sb-ext:save-lisp-and-die ,(namestring core) :toplevel #'uiop:restore-image)))))
+                      (let ((*package* (find-package :keyword)))
+                        (prin1-to-string
+                         `(progn
+                            (load ,(namestring (merge-pathnames "src/load.lisp" root)))
+                            (setf uiop:*image-entry-point* (lambda () (funcall (find-symbol "COMMAND-LINE" "TWIGWM")))
+                                  uiop/image::*image-restored-p* nil)
+                            (sb-ext:save-lisp-and-die ,(namestring core) :toplevel #'uiop:restore-image))))))
+               (unless (probe-file core) (error "Ciel did not save ~a" core))
                (run "codesign" "--force" "--sign" identity (namestring (merge-pathnames "../" contents)))
                (run "codesign" "--verify" "--strict" (namestring (merge-pathnames "../" contents))))))
     (handler-case
