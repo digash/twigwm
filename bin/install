@@ -54,7 +54,8 @@ across rebuilds, where the ad-hoc \"-\" loses them."
                             (load ,(namestring (merge-pathnames "src/load.lisp" root)))
                             (setf uiop:*image-entry-point* (lambda () (funcall (find-symbol "COMMAND-LINE" "TWIGWM")))
                                   uiop/image::*image-restored-p* nil)
-                            (sb-ext:save-lisp-and-die ,(namestring core) :toplevel #'uiop:restore-image))))))
+                            (sb-ext:save-lisp-and-die ,(namestring core) :toplevel #'uiop:restore-image
+                                                      :compression ,(and (member :sb-core-compression *features*) t)))))))
                (unless (probe-file core) (error "Ciel did not save ~a" core))
                (run "codesign" "--force" "--sign" identity (namestring (uiop:pathname-parent-directory-pathname contents)))
                (run "codesign" "--verify" "--strict" (namestring (uiop:pathname-parent-directory-pathname contents))))))
