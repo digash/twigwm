@@ -592,15 +592,6 @@ exactly like the shortcut typed on the keyboard."
   "NAME, a symbol or string such as :maximize-window, as a menu title: Maximize Window."
   (string-capitalize (substitute #\Space #\- (string name))))
 
-(defun number-title (apps n)
-  "The menu title of Command-N: the app N opens in APPS, marked with the device
-*NUMBER-DEVICE* sends it to, or the device Command-0 brings forward."
-  (if (and (zerop n) *zero-device*)
-      (format nil "Show ~a" *zero-device*)
-      (let ((app (twigwm-apps:app-for-number apps n)))
-        (format nil "~a~@[ (~a)~]" (if app (title-case (twigwm-apps:app-name app)) n)
-                *number-device*))))
-
 (defun launchctl (&rest words)
   "Run launchctl WORDS on this LaunchAgent, gui/UID/*AGENT-LABEL*, without waiting:
 it may stop this process."
@@ -624,7 +615,8 @@ would not, as launchd keeps it alive. Otherwise Quit only ends RUN."
              (list :title title :action action)))
       (append
        (loop for n in (twigwm-apps:mac-numbers apps)
-             collect (shortcut (number-title apps n) (aref *number-keycodes* n) +command+))
+             collect (shortcut (title-case (twigwm-apps:app-name (twigwm-apps:app-for-number apps n)))
+                               (aref *number-keycodes* n) +command+))
        '(:separator)
        (loop for code in '(123 124 126 125)
              collect (shortcut (format nil "Move Window ~:(~a~)" (movement-direction code +command+))

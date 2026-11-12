@@ -2,7 +2,7 @@
 (load (merge-pathnames "macos-input.lisp" *load-truename*))
 (defpackage :twigwm
   (:use :cl)
-  (:export #:main #:load-config #:*session-function*))
+  (:export #:main #:command-line #:load-config #:*session-function*))
 (in-package :twigwm)
 
 (defvar *source-directory* (uiop:pathname-directory-pathname *load-truename*))
@@ -33,3 +33,9 @@
       ((member command '(nil "--help" "help") :test #'equal)
        (format t "TwigWM: mac-input | mac-input-trial | mac-input-poc | save-desktop | load-desktop | session~%"))
       (t (error "Unknown TwigWM command: ~a" command)))))
+
+(defun command-line (&optional (args (uiop:command-line-arguments)))
+  "Run MAIN on ARGS, reporting an error as \"TwigWM: ...\" with exit status 1. The
+entry point of bin/twigwm and of TwigWM.app's image."
+  (handler-case (main args)
+    (error (e) (format *error-output* "TwigWM: ~a~%" e) (uiop:quit 1))))

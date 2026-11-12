@@ -2,11 +2,15 @@
 ;;;; Copyright (c) 2026 TwigWM contributors. MIT License.
 (defpackage :twigwm-macos-menubar
   (:use :cl)
-  (:export #:show #:hide #:pump #:clock #:key-equivalent #:*clock-format*))
+  (:export #:show #:hide #:pump #:clock #:key-equivalent #:*clock-format* #:*clock-font*))
 (in-package :twigwm-macos-menubar)
 
 (defvar *clock-format* "%a %H:%M:%S"
   "strftime format of the menu-bar clock.")
+
+(defvar *clock-font* nil
+  "(NAME SIZE) of the menu-bar clock's font, such as (\"TerminusTTF\" 14); a NIL
+SIZE means the menu bar's, and NIL the monospaced system font.")
 
 (defvar *item* nil "The NSStatusItem SHOW put in the menu bar, or NIL.")
 (defvar *timer* nil "The CFRunLoopTimer that redraws the clock every second.")
@@ -103,6 +107,21 @@ the class is registered on first use."
         (msg menu-item "setKeyEquivalentModifierMask:" :unsigned-long (getf item :modifiers 0) :void)
         (msg menu-item "autorelease" :pointer)))))
 
+(defun clock-font ()
+  "The NSFont *CLOCK-FONT* names, else, also when it is not installed, the
+monospaced system font, at its size or the menu bar's."
+  (let ((size (float (or (second *clock-font*)
+                         (msg (msg (objc-class "NSFont") "menuBarFontOfSize:" :double 0d0 :pointer)
+                              "pointSize" :double))
+                     1d0)))
+    (or (and *clock-font*
+             (twigwm-macos-apps::with-cf (name (twigwm-macos-apps::cf-string (first *clock-font*)))
+               (let ((font (msg (objc-class "NSFont") "fontWithName:size:"
+                                :pointer name :double size :pointer)))
+                 (unless (cffi:null-pointer-p font) font))))
+        (msg (objc-class "NSFont") "monospacedSystemFontOfSize:weight:"
+             :double size :double 0d0 :pointer))))
+
 (defun common-modes ()
   "kCFRunLoopCommonModes, which also covers AppKit's menu-tracking mode."
   (cffi:mem-ref (cffi:foreign-symbol-pointer "kCFRunLoopCommonModes") :pointer))
@@ -138,12 +157,7 @@ Event-tap sources must be in COMMON-MODES to keep running while a menu is open."
         (setf *item* (msg (msg (msg (objc-class "NSStatusBar") "systemStatusBar" :pointer)
                                "statusItemWithLength:" :double -1d0 :pointer)
                           "retain" :pointer))
-        (msg (msg *item* "button" :pointer) "setFont:" :pointer
-             (msg (objc-class "NSFont") "monospacedSystemFontOfSize:weight:"
-                  :double (msg (msg (objc-class "NSFont") "menuBarFontOfSize:" :double 0d0 :pointer)
-                               "pointSize" :double)
-                  :double 0d0 :pointer)
-             :void)
+        (msg (msg *item* "button" :pointer) "setFont:" :pointer (clock-font) :void)
         (msg *item* "setMenu:" :pointer menu :void)
         (msg menu "release" :void)
         (show-clock)

@@ -3,8 +3,6 @@
 (let* ((args (uiop:command-line-arguments))
        (args (if (equal (first args) "--") (rest args) args))
        (self (truename (first args))))
-  (handler-case
-      (progn
-        (load (merge-pathnames "../src/load.lisp" self))
-        (funcall (find-symbol "MAIN" :twigwm) (rest args)))
-    (error (e) (format *error-output* "TwigWM: ~a~%" e) (uiop:quit 1))))
+  (handler-case (load (merge-pathnames "../src/load.lisp" self))
+    (error (e) (format *error-output* "TwigWM: ~a~%" e) (uiop:quit 1)))
+  (funcall (find-symbol "COMMAND-LINE" :twigwm) (rest args)))

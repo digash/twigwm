@@ -19,7 +19,7 @@
          (let* ((items (menu-items nil))
                 (titled (remove :separator items))
                 (titles (mapcar (lambda (item) (getf item :title)) titled)))
-           (assert (equal '("Terminal (desktop)" "Browser (desktop)" "Show secondary"
+           (assert (equal '("Terminal" "Browser" "Remote"
                             "Move Window Left" "Move Window Right" "Move Window Up"
                             "Move Window Down" "Previous Window"
                             "Maximize Window" "Screenshot Region" "Art"
@@ -44,10 +44,7 @@
              (funcall (getf (car (last titled)) :action))
              (assert *quit*)))
          (let ((titles (mapcar (lambda (item) (getf item :title)) (remove :separator (menu-items t)))))
-           (assert (equal '("Reload TwigWM" "Quit TwigWM") (last titles 2))))
-         (let ((*number-device* nil) (*zero-device* nil))
-           (assert (equal '("Terminal" "Browser" "Remote")
-                          (mapcar (lambda (item) (getf item :title)) (subseq (menu-items nil) 0 3))))))
+           (assert (equal '("Reload TwigWM" "Quit TwigWM") (last titles 2)))))
     (setf (symbol-function 'twigwm-macos-menubar:key-equivalent) equivalent)))
 (format t "PASS: menu lists every shortcut with its key, types its chord untagged, and quits or reloads the agent.~%")
 
