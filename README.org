@@ -26,16 +26,28 @@ Copy =examples/config.lisp= to =~/.config/twigwm/config.lisp= and edit your app
 assignments. =TWIGWM_CONFIG= overrides that path; =XDG_CONFIG_HOME= is respected.
 Configuration is executable Lisp and should come from a source you trust.
 
-On macOS, grant the Ciel executable Accessibility and Input Monitoring access
-in System Settings, then run:
+On macOS the input service runs as =~/Applications/TwigWM.app=, built from this
+checkout in Ciel.app's layout: Ciel's SBCL runtime as its executable and an
+image saved with TwigWM loaded. Build it, grant =TwigWM.app= Accessibility and
+Input Monitoring in System Settings, then install the LaunchAgent:
 
 #+begin_src sh
-ciel -- bin/install --mac-input
+ciel -- bin/install --app --sign "IDENTITY"
+ciel -- bin/install --mac-input --sign "IDENTITY"
 #+end_src
 
+=IDENTITY= is a code signing identity in your keychain. macOS keys those grants
+to it and the bundle identifier, so they survive rebuilds signed with the same
+one; a self-signed certificate made as for Ciel.app is enough. Without =--sign=
+the app is signed ad hoc and loses the grants on every rebuild. Rebuild after
+pulling changes, as the app does not read this checkout.
+
 This installs the per-user =org.twigwm.input= LaunchAgent. Its log is
-=~/Library/Logs/twigwm-input.log=. Reload it after editing configuration with
-=launchctl kickstart -k gui/UID/org.twigwm.input= (replace UID with =id -u='s output).
+=~/Library/Logs/twigwm-input.log=. Its menu-bar clock lists every shortcut;
+Reload TwigWM restarts the agent, also after editing configuration, and Quit
+TwigWM stops it until the next login. =twigwm-macos-menubar:*clock-format*=
+(strftime) and =*clock-font*= set the clock, and =twigwm-macos-input:*menu-host*=
+the host whose app table titles Command-1 to Command-0.
 
 * macOS controls
 
