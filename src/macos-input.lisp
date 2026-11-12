@@ -1,10 +1,11 @@
 ;;;; Native input tap: isolated probes and resident app shortcuts.
 (load (merge-pathnames "macos-apps.lisp" *load-truename*))
+(load (merge-pathnames "macos-menubar.lisp" *load-truename*))
 (load (merge-pathnames "apps.lisp" *load-truename*))
 (load (merge-pathnames "keys.lisp" *load-truename*))
 (defpackage :twigwm-macos-input
   (:use :cl)
-  (:export #:probe #:run #:*number-device* #:*zero-device*))
+  (:export #:probe #:run #:*number-device* #:*zero-device* #:*menu-host*))
 (in-package :twigwm-macos-input)
 
 ;;; Pure FIFO: readiness is explicit and belongs to one handoff generation.
@@ -56,6 +57,18 @@
 (defvar *app-down* (make-hash-table))
 (defvar *app-actions* nil)
 (defvar *app-thread* nil)
+(defvar *quit* nil "True once the menu asks a run outside launchd to stop.")
+(defvar *menu-host* nil
+  "Host whose app table titles the menu items for Command-1 to Command-0, NIL for
+this Mac. Set it to the host *NUMBER-DEVICE* reaches, whose apps those keys open.")
+(defparameter *agent-label* "org.twigwm.input"
+  "Label of the LaunchAgent bin/install creates for the input service.")
+(defparameter *number-keycodes* #(29 18 19 20 21 23 22 26 28 25)
+  "Virtual keycodes of the number row, indexed by digit.")
+(defparameter *chord-modifiers*
+  (quote ((#x100000 55 #x8) (#x20000 56 #x2) (#x80000 58 #x20) (#x40000 59 #x1)))
+  "Command, Shift, Option and Control: each modifier flag, the keycode of its left
+key, and the device flag a keyboard adds for that key.")
 
 
 (defun queue-app-action (&rest action)
@@ -81,7 +94,7 @@
     (cffi:foreign-funcall "CFRelease" :pointer (second action) :void)))
 
 (defun number-key (code)
-  (position code #(29 18 19 20 21 23 22 26 28 25)))
+  (position code *number-keycodes*))
 
 (defun number-p (code modifiers)
   (and (number-key code) (= modifiers +command+)))
@@ -134,6 +147,7 @@
                         (ecase (first action)
                           (:activate (apply #'activate-app (rest action)))
                           (:launch (apply #'launch-native-command (rest action)))
+                          (:call (funcall (second action)))
                           (:saved-device (apply #'twigwm-macos-apps:open-saved-device (rest action)))
                           (:previous-window (twigwm-macos-apps:previous-window remote))
                           (:finish-cycle (twigwm-macos-apps:finish-cycle))
@@ -255,8 +269,9 @@
            (cffi:foreign-funcall "CGEventPost" :uint32 0 :pointer event :void))
       (release-events (list source)))))
 
-(defun post-key-chord (pid chord)
-  "Send modifier transitions to PID, or globally when PID is NIL."
+(defun post-key-chord (pid chord &optional (tag +chord-tag+))
+  "Send modifier transitions to PID, or globally when PID is NIL, with source TAG;
+the event tap passes the default +CHORD-TAG+ through and handles untagged input."
   (let (events)
     (unwind-protect
          (progn
@@ -273,7 +288,7 @@
            (dolist (event (reverse events))
              (if pid
                  (post-to-app pid event)
-                 (post-event event +chord-tag+))))
+                 (post-event event tag))))
       (release-events events))))
 
 (defun dispatch-native-fields (code type flags pid bundle &optional local-p)
@@ -537,22 +552,97 @@
                                            :pointer (cffi:null-pointer) :pointer tap
                                            :long 0 :pointer))
                (run-loop (cffi:foreign-funcall "CFRunLoopGetCurrent" :pointer))
-               (mode (cffi:mem-ref (cffi:foreign-symbol-pointer "kCFRunLoopDefaultMode") :pointer)))
+               (mode (cffi:mem-ref (cffi:foreign-symbol-pointer "kCFRunLoopDefaultMode") :pointer))
+               (common (cffi:mem-ref (cffi:foreign-symbol-pointer "kCFRunLoopCommonModes") :pointer)))
            (when (cffi:null-pointer-p source) (error "Cannot create event-tap run-loop source"))
            (unwind-protect
                 (progn
                   (cffi:foreign-funcall "CFRunLoopAddSource" :pointer run-loop
-                                      :pointer source :pointer mode :void)
+                                      :pointer source :pointer common :void)
                   (cffi:foreign-funcall "CGEventTapEnable" :pointer tap :unsigned-char 1 :void)
                   (assert (plusp (cffi:foreign-funcall "CGEventTapIsEnabled"
                                                      :pointer tap :unsigned-char)))
                   (funcall function mode))
              (cffi:foreign-funcall "CFRunLoopRemoveSource" :pointer run-loop
-                                 :pointer source :pointer mode :void)
+                                 :pointer source :pointer common :void)
              (release-events (list source))))
       (cancel)
       (cffi:foreign-funcall "CFMachPortInvalidate" :pointer tap :void)
       (release-events (list tap)))))
+
+(defun key-chord (code modifiers)
+  "(CODE TYPE FLAGS) events that type keycode CODE with MODIFIERS held: modifier
+presses first, released last, as a keyboard reports them."
+  (let* ((held (remove-if-not (lambda (modifier) (logtest (first modifier) modifiers))
+                              *chord-modifiers*))
+         (flags 0)
+         (presses (loop for (mask key device) in held
+                        collect (list key 12 (setf flags (logior flags mask device))))))
+    (append presses
+            (list (list code 10 flags) (list code 11 flags))
+            (loop for (mask key device) in (reverse held)
+                  collect (list key 12 (setf flags (logandc2 flags (logior mask device))))))))
+
+(defun press (code modifiers)
+  "Type keycode CODE with MODIFIERS as untagged input, so the event tap handles it
+exactly like the shortcut typed on the keyboard."
+  (post-key-chord nil (key-chord code modifiers) 0))
+
+(defun title-case (name)
+  "NAME, a symbol or string such as :maximize-window, as a menu title: Maximize Window."
+  (string-capitalize (substitute #\Space #\- (string name))))
+
+(defun number-title (apps n)
+  "The menu title of Command-N: the app N opens in APPS, marked with the device
+*NUMBER-DEVICE* sends it to, or the device Command-0 brings forward."
+  (if (and (zerop n) *zero-device*)
+      (format nil "Show ~a" *zero-device*)
+      (let ((app (twigwm-apps:app-for-number apps n)))
+        (format nil "~a~@[ (~a)~]" (if app (title-case (twigwm-apps:app-name app)) n)
+                *number-device*))))
+
+(defun launchctl (&rest words)
+  "Run launchctl WORDS on this LaunchAgent, gui/UID/*AGENT-LABEL*, without waiting:
+it may stop this process."
+  (uiop:launch-program (append '("launchctl") words
+                               (list (format nil "gui/~d/~a"
+                                             (cffi:foreign-funcall "getuid" :unsigned-int)
+                                             *agent-label*)))))
+
+(defun menu-items (&optional (agent-p (equal (uiop:getenv "XPC_SERVICE_NAME") *agent-label*)))
+  "Menu-bar items for every native shortcut, each typing its chord, then desktop
+saving and Reload and Quit. AGENT-P means launchd runs this process as
+*AGENT-LABEL*: Reload restarts that agent and Quit stops it, which a plain exit
+would not, as launchd keeps it alive. Otherwise Quit only ends RUN."
+  (let ((apps (twigwm-apps:apps-for-host (or *menu-host* twigwm-apps:*mac-host*))))
+    (flet ((shortcut (title code modifiers)
+             "An item titled TITLE that types CODE with MODIFIERS, shown at its right."
+             (list :title title :key (twigwm-macos-menubar:key-equivalent code)
+                   :modifiers modifiers :action (lambda () (press code modifiers))))
+           (command (title action)
+             "An item titled TITLE that runs ACTION."
+             (list :title title :action action)))
+      (append
+       (loop for n in (twigwm-apps:mac-numbers apps)
+             collect (shortcut (number-title apps n) (aref *number-keycodes* n) +command+))
+       '(:separator)
+       (loop for code in '(123 124 126 125)
+             collect (shortcut (format nil "Move Window ~:(~a~)" (movement-direction code +command+))
+                               code +command+))
+       (list (shortcut "Previous Window" 53 +command+))
+       '(:separator)
+       (loop for key in (twigwm-keys:mac-keys)
+             for mac = (twigwm-keys:key-mac key)
+             collect (shortcut (title-case (twigwm-keys:key-action key))
+                               (getf mac :keycode) (getf mac :modifiers 0)))
+       '(:separator)
+       (list (command "Save Desktop" (lambda () (queue-app-action :call #'twigwm-macos-apps:save-desktop)))
+             (command "Load Desktop" (lambda () (queue-app-action :call #'twigwm-macos-apps:load-desktop))))
+       '(:separator)
+       (when agent-p (list (command "Reload TwigWM" (lambda () (launchctl "kickstart" "-k")))))
+       (list (command "Quit TwigWM" (if agent-p
+                                        (lambda () (launchctl "bootout"))
+                                        (lambda () (setf *quit* t)))))))))
 
 (defun probe ()
   "Bounded native test; only tagged input is captured, replay goes to a test sink."
@@ -567,7 +657,7 @@
 (defun run (&key seconds (modifiers +command+))
   "Resident app shortcuts; SECONDS bounds a trial, NIL runs until stopped."
   (let* ((*live* t) (*lease* nil) (*prefix-modifiers* modifiers) (*escape-down* nil)
-         (*escape-cycle* nil)
+         (*escape-cycle* nil) (*quit* nil)
          (apps (twigwm-apps:apps-for-mac))
          (*remote-bundles* (twigwm-apps:mac-passthrough-bundles apps))
          (history-stop (sb-thread:make-semaphore)) (history-thread nil)
@@ -589,17 +679,19 @@
                            (ignore-errors (twigwm-macos-apps:place-new-windows)))
                       until (sb-thread:wait-on-semaphore history-stop :timeout 0.1)))
               :name "Mac focused window history"))
+       (twigwm-macos-menubar:show (menu-items))
        (format t "READY: native app shortcuts (~x); ~a.~%" modifiers
                (if seconds "bounded trial" "resident"))
        (finish-output)
-       (loop with end = (and seconds (+ (get-internal-real-time)
-                                       (* seconds internal-time-units-per-second)))
-             while (or (not end) (< (get-internal-real-time) end))
-             do (when *callback-error* (error "Event tap failed: ~a" *callback-error*))
-                (service-tick)
-                (service-apps)
-                (cffi:foreign-funcall "CFRunLoopRunInMode" :pointer mode
-                                    :double 0.01d0 :unsigned-char 1 :int32))))
+       (unwind-protect
+            (loop with end = (and seconds (+ (get-internal-real-time)
+                                            (* seconds internal-time-units-per-second)))
+                  while (and (not *quit*) (or (not end) (< (get-internal-real-time) end)))
+                  do (when *callback-error* (error "Event tap failed: ~a" *callback-error*))
+                     (service-tick)
+                     (service-apps)
+                     (twigwm-macos-menubar:pump mode 0.01d0))
+         (twigwm-macos-menubar:hide))))
       (when *app-thread* (sb-thread:join-thread *app-thread*))
       (sb-thread:signal-semaphore history-stop)
       (when history-thread (sb-thread:join-thread history-thread))
