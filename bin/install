@@ -27,7 +27,7 @@ the signing identity and bundle identifier, so a stable IDENTITY keeps them
 across rebuilds, where the ad-hoc \"-\" loses them."
              (let ((runtime sb-ext:*runtime-pathname*)
                    (core (merge-pathnames "Resources/twigwm.core" contents)))
-               (uiop:delete-directory-tree (merge-pathnames "../" contents)
+               (uiop:delete-directory-tree (uiop:pathname-parent-directory-pathname contents)
                                            :validate t :if-does-not-exist :ignore)
                (ensure-directories-exist (merge-pathnames "MacOS/" contents))
                (ensure-directories-exist core)
@@ -56,8 +56,8 @@ across rebuilds, where the ad-hoc \"-\" loses them."
                                   uiop/image::*image-restored-p* nil)
                             (sb-ext:save-lisp-and-die ,(namestring core) :toplevel #'uiop:restore-image))))))
                (unless (probe-file core) (error "Ciel did not save ~a" core))
-               (run "codesign" "--force" "--sign" identity (namestring (merge-pathnames "../" contents)))
-               (run "codesign" "--verify" "--strict" (namestring (merge-pathnames "../" contents))))))
+               (run "codesign" "--force" "--sign" identity (namestring (uiop:pathname-parent-directory-pathname contents)))
+               (run "codesign" "--verify" "--strict" (namestring (uiop:pathname-parent-directory-pathname contents))))))
     (handler-case
         (progn
           (dolist (pair (list (cons (merge-pathnames "bin/twigwm" root)
