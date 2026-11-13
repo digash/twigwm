@@ -52,3 +52,12 @@
 (assert (equal (twigwm-macos-menubar:clock "%Y")
                (princ-to-string (nth-value 5 (decode-universal-time (get-universal-time))))))
 (format t "PASS: menu-bar clock is local strftime.~%")
+
+(let ((twigwm-macos-menubar:*clock-format* '("%Y" "%m" "%d"))
+      (twigwm-macos-menubar:*clock-colors* '((0 255 255) (255 255 0))))
+  (let ((runs (twigwm-macos-menubar:clock-runs)))
+    (assert (equal '((0 255 255) (255 255 0) (0 255 255)) (mapcar #'cdr runs)))
+    (assert (equal (twigwm-macos-menubar:clock "%Y%m%d") (format nil "~{~a~}" (mapcar #'car runs))))))
+(let ((twigwm-macos-menubar:*clock-format* "%Y"))
+  (assert (equal (list (list (twigwm-macos-menubar:clock "%Y"))) (twigwm-macos-menubar:clock-runs))))
+(format t "PASS: menu-bar clock runs take *clock-colors* in turn, and a plain format is one uncoloured run.~%")

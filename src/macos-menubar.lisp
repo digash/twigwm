@@ -2,11 +2,17 @@
 ;;;; Copyright (c) 2026 TwigWM contributors. MIT License.
 (defpackage :twigwm-macos-menubar
   (:use :cl)
-  (:export #:show #:hide #:pump #:clock #:key-equivalent #:*clock-format* #:*clock-font*))
+  (:export #:show #:hide #:pump #:clock #:clock-runs #:key-equivalent #:*clock-format*
+           #:*clock-colors* #:*clock-font*))
 (in-package :twigwm-macos-menubar)
 
 (defvar *clock-format* "%a %H:%M:%S"
-  "strftime format of the menu-bar clock.")
+  "strftime format of the menu-bar clock, or a list of formats whose runs
+*CLOCK-COLORS* colours in turn.")
+
+(defvar *clock-colors* nil
+  "List of (RED GREEN BLUE), each 0 to 255, that colour the runs of the clock
+in turn; NIL leaves it the menu bar's colour.")
 
 (defvar *clock-font* nil
   "(NAME SIZE) of the menu-bar clock's font, such as (\"TerminusTTF\" 14); a NIL
@@ -42,7 +48,7 @@ inexact operations internally, which SBCL would otherwise signal as errors."
   "The Objective-C class NAME, or a null pointer."
   (twigwm-macos-apps::class name))
 
-(defun clock (&optional (format *clock-format*))
+(defun clock (format)
   "The local time as strftime FORMAT, in the C locale this process keeps."
   (cffi:with-foreign-objects ((now :long) (tm :char 64) (text :char 64))
     (setf (cffi:mem-ref now :long)
@@ -50,6 +56,14 @@ inexact operations internally, which SBCL would otherwise signal as errors."
     (cffi:foreign-funcall "localtime_r" :pointer now :pointer tm :pointer)
     (cffi:foreign-funcall "strftime" :pointer text :size 64 :string format :pointer tm :size)
     (cffi:foreign-string-to-lisp text)))
+
+(defun clock-runs ()
+  "The clock as a list of (TEXT . COLOR), one per *CLOCK-FORMAT* run: CLOCK of the
+run and its colour from *CLOCK-COLORS* in turn, or NIL."
+  (loop for format in (if (listp *clock-format*) *clock-format* (list *clock-format*))
+        for i from 0
+        collect (cons (clock format)
+                      (and *clock-colors* (nth (mod i (length *clock-colors*)) *clock-colors*)))))
 
 (defun key-equivalent (code)
   "The NSMenuItem key equivalent for virtual keycode CODE: an AppKit function-key
@@ -68,11 +82,63 @@ character, else what the current keyboard layout types for CODE."
                      ""))
             (cffi:foreign-funcall "CFRelease" :pointer event :void))))))
 
+(defun clock-font ()
+  "The NSFont *CLOCK-FONT* names, else, also when it is not installed, the
+monospaced system font, at its size or the menu bar's."
+  (let ((size (float (or (second *clock-font*)
+                         (msg (msg (objc-class "NSFont") "menuBarFontOfSize:" :double 0d0 :pointer)
+                              "pointSize" :double))
+                     1d0)))
+    (or (and *clock-font*
+             (twigwm-macos-apps::with-cf (name (twigwm-macos-apps::cf-string (first *clock-font*)))
+               (let ((font (msg (objc-class "NSFont") "fontWithName:size:"
+                                :pointer name :double size :pointer)))
+                 (unless (cffi:null-pointer-p font) font))))
+        (msg (objc-class "NSFont") "monospacedSystemFontOfSize:weight:"
+             :double size :double 0d0 :pointer))))
+
+(defun appkit-constant (name)
+  "The AppKit global NAME, such as the string constant NSFontAttributeName."
+  (cffi:mem-ref (cffi:foreign-symbol-pointer name) :pointer))
+
+(defun clock-title ()
+  "An autoreleased NSAttributedString of CLOCK-RUNS in CLOCK-FONT, each run in its
+sRGB colour."
+  (let ((title (msg (msg (msg (objc-class "NSMutableAttributedString") "alloc" :pointer)
+                         "init" :pointer)
+                    "autorelease" :pointer))
+        (font (clock-font)))
+    (loop for (text red green blue) in (clock-runs)
+          do (cffi:with-foreign-objects ((keys :pointer 2) (objects :pointer 2))
+               (setf (cffi:mem-aref keys :pointer 0) (appkit-constant "NSFontAttributeName")
+                     (cffi:mem-aref keys :pointer 1) (appkit-constant "NSForegroundColorAttributeName")
+                     (cffi:mem-aref objects :pointer 0) font
+                     (cffi:mem-aref objects :pointer 1)
+                     (msg (objc-class "NSColor") "colorWithSRGBRed:green:blue:alpha:"
+                          :double (/ red 255d0) :double (/ green 255d0) :double (/ blue 255d0)
+                          :double 1d0 :pointer))
+               (twigwm-macos-apps::with-cf (string (twigwm-macos-apps::cf-string text))
+                 (let ((run (msg (msg (objc-class "NSAttributedString") "alloc" :pointer)
+                                 "initWithString:attributes:" :pointer string
+                                 :pointer (msg (objc-class "NSDictionary")
+                                               "dictionaryWithObjects:forKeys:count:"
+                                               :pointer objects :pointer keys :unsigned-long 2
+                                               :pointer)
+                                 :pointer)))
+                   (msg title "appendAttributedString:" :pointer run :void)
+                   (msg run "release" :void)))))
+    title))
+
 (defun show-clock ()
-  "Set the menu-bar item's title to CLOCK."
+  "Set the menu-bar item's title to CLOCK-RUNS: coloured by CLOCK-TITLE when
+*CLOCK-COLORS* is set, else plain in the menu bar's colour."
   (twigwm-macos-apps::with-pool
-    (twigwm-macos-apps::with-cf (title (twigwm-macos-apps::cf-string (clock)))
-      (msg (msg *item* "button" :pointer) "setTitle:" :pointer title :void))))
+    (let ((button (msg *item* "button" :pointer)))
+      (if *clock-colors*
+          (msg button "setAttributedTitle:" :pointer (clock-title) :void)
+          (twigwm-macos-apps::with-cf (title (twigwm-macos-apps::cf-string
+                                              (format nil "~{~a~}" (mapcar #'car (clock-runs)))))
+            (msg button "setTitle:" :pointer title :void))))))
 
 (cffi:defcallback choose :void ((self :pointer) (command :pointer) (item :pointer))
                   (declare (ignore self command))
@@ -106,21 +172,6 @@ the class is registered on first use."
         (msg menu-item "setTag:" :long tag :void)
         (msg menu-item "setKeyEquivalentModifierMask:" :unsigned-long (getf item :modifiers 0) :void)
         (msg menu-item "autorelease" :pointer)))))
-
-(defun clock-font ()
-  "The NSFont *CLOCK-FONT* names, else, also when it is not installed, the
-monospaced system font, at its size or the menu bar's."
-  (let ((size (float (or (second *clock-font*)
-                         (msg (msg (objc-class "NSFont") "menuBarFontOfSize:" :double 0d0 :pointer)
-                              "pointSize" :double))
-                     1d0)))
-    (or (and *clock-font*
-             (twigwm-macos-apps::with-cf (name (twigwm-macos-apps::cf-string (first *clock-font*)))
-               (let ((font (msg (objc-class "NSFont") "fontWithName:size:"
-                                :pointer name :double size :pointer)))
-                 (unless (cffi:null-pointer-p font) font))))
-        (msg (objc-class "NSFont") "monospacedSystemFontOfSize:weight:"
-             :double size :double 0d0 :pointer))))
 
 (defun common-modes ()
   "kCFRunLoopCommonModes, which also covers AppKit's menu-tracking mode."
